@@ -4,12 +4,25 @@ Build and deploy Flutter applications.
 
 ## Usage
 
+### Production Deploy
+
 ```yaml
 - uses: open-ci-io/flutter-cd@v1
   with:
     platform: "web"
     working-directory: "apps/dashboard"
     firebase-service-account: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+```
+
+### Preview Deploy (for PRs)
+
+```yaml
+- uses: open-ci-io/flutter-cd@v1
+  with:
+    platform: "web"
+    working-directory: "apps/dashboard"
+    firebase-service-account: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    channel: "pr-${{ github.event.pull_request.number }}"
 ```
 
 ## Inputs
@@ -20,6 +33,7 @@ Build and deploy Flutter applications.
 | `working-directory` | Flutter project directory | No | `.` |
 | `build-args` | Additional arguments for flutter build | No | `""` |
 | `firebase-service-account` | GCP service account JSON for Firebase deploy | No | `""` |
+| `channel` | Firebase Hosting preview channel name. If set, deploys to a preview channel instead of the live site. | No | `""` |
 
 ## What it does
 
@@ -29,7 +43,7 @@ Build and deploy Flutter applications.
 2. Finds `firebase.json` in the repository
 3. Copies build output to the Firebase public directory
 4. Installs `firebase-tools` if not available (auto-installs Node.js if needed)
-5. Deploys to Firebase Hosting
+5. Deploys to Firebase Hosting (live or preview channel)
 
 ## License
 

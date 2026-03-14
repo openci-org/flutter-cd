@@ -17,6 +17,10 @@ inputs:
     description: GCP service account JSON for Firebase deploy
     required: false
     default: ""
+  channel:
+    description: "Firebase Hosting preview channel name. If set, deploys to a preview channel instead of the live site."
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -66,8 +70,15 @@ runs:
         export GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json
         PROJECT_ID=$(echo "$SA_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['project_id'])")
         cd "$FIREBASE_DIR"
-        $FIREBASE_CMD deploy --only hosting --project "$PROJECT_ID" --non-interactive
+        if [ -n "$CHANNEL" ]; then
+          echo "-- Deploying to preview channel: $CHANNEL"
+          $FIREBASE_CMD hosting:channel:deploy "$CHANNEL" --project "$PROJECT_ID" --non-interactive
+        else
+          echo "-- Deploying to live site"
+          $FIREBASE_CMD deploy --only hosting --project "$PROJECT_ID" --non-interactive
+        fi
         rm -f /tmp/firebase-sa.json
       env:
         SA_JSON: ${{ inputs.firebase-service-account }}
         WORKING_DIR: ${{ inputs.working-directory }}
+        CHANNEL: ${{ inputs.channel }}
