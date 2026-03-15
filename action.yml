@@ -3,7 +3,7 @@ description: Build and deploy a Flutter application
 
 inputs:
   platform:
-    description: Target platform (web, android, ios, macos)
+    description: Target platform (web, ios)
     required: true
   working-directory:
     description: Flutter project directory
@@ -14,72 +14,54 @@ inputs:
     required: false
     default: ""
   firebase-service-account:
-    description: GCP service account JSON for Firebase deploy
+    description: GCP service account JSON for Firebase deploy (web)
     required: false
     default: ""
   preview:
-    description: "If true, deploys to a Firebase Hosting preview channel instead of the live site."
+    description: "Deploy to a Firebase Hosting preview channel (web)"
     required: false
     default: "false"
+  asc-key-id:
+    description: "App Store Connect API Key ID (ios)"
+    required: false
+    default: ""
+  asc-issuer-id:
+    description: "App Store Connect API Issuer ID (ios)"
+    required: false
+    default: ""
+  asc-private-key:
+    description: "App Store Connect API Private Key, .p8 PEM content (ios)"
+    required: false
+    default: ""
+  bundle-id:
+    description: "iOS Bundle Identifier (ios)"
+    required: false
+    default: ""
+  apple-team-id:
+    description: "Apple Developer Team ID (ios)"
+    required: false
+    default: ""
+  scheme:
+    description: "Xcode scheme name (ios)"
+    required: false
+    default: "Runner"
+  upload-to-testflight:
+    description: "Upload the IPA to TestFlight after export (ios)"
+    required: false
+    default: "true"
+  distribution-certificate-p12:
+    description: "Base64-encoded .p12 certificate for reuse (ios)"
+    required: false
+    default: ""
+  distribution-certificate-id:
+    description: "ASC certificate ID for reuse (ios)"
+    required: false
+    default: ""
+  distribution-certificate-password:
+    description: "P12 password (ios)"
+    required: false
+    default: "openci"
 
 runs:
-  using: composite
-  steps:
-    - name: Build web
-      if: inputs.platform == 'web'
-      shell: bash
-      working-directory: ${{ inputs.working-directory }}
-      run: flutter build web ${{ inputs.build-args }}
-
-    - name: Deploy to Firebase Hosting
-      if: inputs.platform == 'web'
-      shell: bash
-      run: |
-        FIREBASE_DIR=$(dirname "$(find . -name firebase.json -not -path '*/node_modules/*' | head -1)")
-        if [ -z "$FIREBASE_DIR" ] || [ "$FIREBASE_DIR" = "." ]; then
-          echo "Error: firebase.json not found"
-          exit 1
-        fi
-        echo "Found firebase.json in $FIREBASE_DIR"
-
-        rm -rf "$FIREBASE_DIR/public"
-        cp -r "$WORKING_DIR/build/web" "$FIREBASE_DIR/public"
-
-        if command -v firebase &> /dev/null; then
-          FIREBASE_CMD="firebase"
-        else
-          if ! command -v npm &> /dev/null; then
-            echo "-- Installing Node.js..."
-            NODE_VERSION="v20.18.3"
-            ARCH=$(uname -m)
-            if [ "$ARCH" = "arm64" ]; then
-              NODE_ARCH="arm64"
-            else
-              NODE_ARCH="x64"
-            fi
-            curl -fSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz
-            tar -xzf /tmp/node.tar.gz -C /tmp
-            export PATH="/tmp/node-${NODE_VERSION}-darwin-${NODE_ARCH}/bin:$PATH"
-          fi
-          echo "-- Installing firebase-tools via npm..."
-          npm i -g firebase-tools
-          FIREBASE_CMD="firebase"
-        fi
-
-        echo "$SA_JSON" > /tmp/firebase-sa.json
-        export GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json
-        PROJECT_ID=$(echo "$SA_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['project_id'])")
-        cd "$FIREBASE_DIR"
-        if [ "$PREVIEW" = "true" ]; then
-          CHANNEL="preview-$(git rev-parse --short HEAD 2>/dev/null || date +%s)"
-          echo "-- Deploying to preview channel: $CHANNEL"
-          $FIREBASE_CMD hosting:channel:deploy "$CHANNEL" --project "$PROJECT_ID" --non-interactive
-        else
-          echo "-- Deploying to live site"
-          $FIREBASE_CMD deploy --only hosting --project "$PROJECT_ID" --non-interactive
-        fi
-        rm -f /tmp/firebase-sa.json
-      env:
-        SA_JSON: ${{ inputs.firebase-service-account }}
-        WORKING_DIR: ${{ inputs.working-directory }}
-        PREVIEW: ${{ inputs.preview }}
+  using: node20
+  main: dist/index.js
