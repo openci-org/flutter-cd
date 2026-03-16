@@ -26071,21 +26071,12 @@ const helpers_1 = __nccwpck_require__(1302);
 const asc_1 = __nccwpck_require__(6350);
 const KEYCHAIN_NAME = "openci-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
-const DEPLOY_CONFIG = {
-    testflight: { exportMethod: "app-store-connect", profileType: "IOS_APP_STORE", destination: "upload" },
-    firebase: { exportMethod: "ad-hoc", profileType: "IOS_APP_AD_HOC", destination: "export" },
-};
 async function buildAndSignIos() {
     const workingDirectory = core.getInput("working-directory") || ".";
     const buildArgs = core.getInput("build-args") || "";
     const bundleId = detectBundleId(workingDirectory);
     const appleTeamId = core.getInput("apple-team-id", { required: true });
     const scheme = core.getInput("scheme") || "Runner";
-    const deployTo = (core.getInput("deploy-to") || "testflight");
-    if (!(deployTo in DEPLOY_CONFIG)) {
-        throw new Error(`Unsupported deploy-to: ${deployTo}. Use "testflight" or "firebase"`);
-    }
-    const deploy = DEPLOY_CONFIG[deployTo];
     const certPrivateKey = core.getInput("certificate-private-key", { required: true });
     const ascKeyId = core.getInput("asc-key-id", { required: true });
     const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
@@ -26096,7 +26087,7 @@ async function buildAndSignIos() {
         console.log(`   Bundle ID: ${bundleId}`);
         console.log(`   Apple Team ID: ${appleTeamId}`);
         console.log(`   Scheme: ${scheme}`);
-        console.log(`   Deploy to: ${deployTo}`);
+        console.log("");
         console.log("");
         // ── Step 1: Flutter build ───────────────────────────────
         core.startGroup("Step 1: Flutter build ios (no codesign)");
@@ -26120,7 +26111,7 @@ async function buildAndSignIos() {
         core.endGroup();
         // ── Step 4: Create provisioning profile ─────────────────
         core.startGroup("Step 4: Creating provisioning profile");
-        const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, deploy.profileType);
+        const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, "IOS_APP_STORE");
         console.log(`  ✅ Profile created`);
         console.log(`     Name: ${profile.name}`);
         console.log(`     UUID: ${profile.uuid}`);
@@ -26148,7 +26139,7 @@ async function buildAndSignIos() {
         // ── Step 9: Generate ExportOptions.plist ────────────────
         core.startGroup("Step 9: Generating ExportOptions.plist");
         const exportOptionsPath = path.join(workingDirectory, "ExportOptions.plist");
-        generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid, deploy);
+        generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid);
         console.log("  ✅ ExportOptions.plist generated");
         core.endGroup();
         // ── Step 10: Build archive ──────────────────────────────
@@ -26268,13 +26259,13 @@ function editXcodeProject(workingDirectory, bundleId, appleTeamId, profile) {
 // ══════════════════════════════════════════════════════════════
 // ExportOptions.plist
 // ══════════════════════════════════════════════════════════════
-function generateExportOptions(outputPath, teamId, bundleId, profileUuid, deploy) {
+function generateExportOptions(outputPath, teamId, bundleId, profileUuid) {
     const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>${deploy.exportMethod}</string>
+    <string>app-store-connect</string>
     <key>teamID</key>
     <string>${teamId}</string>
     <key>signingStyle</key>
@@ -26287,7 +26278,7 @@ function generateExportOptions(outputPath, teamId, bundleId, profileUuid, deploy
     <key>signingCertificate</key>
     <string>Apple Distribution</string>
     <key>destination</key>
-    <string>${deploy.destination}</string>
+    <string>upload</string>
     <key>stripSwiftSymbols</key>
     <true/>
     <key>uploadSymbols</key>

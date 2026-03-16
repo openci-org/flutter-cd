@@ -45,10 +45,6 @@ inputs:
     description: "Xcode scheme name (ios)"
     required: false
     default: "Runner"
-  deploy-to:
-    description: "Deployment target: testflight or firebase (ios)"
-    required: false
-    default: "testflight"
 
 runs:
   using: node20
