@@ -19,10 +19,10 @@ export async function buildAndSignIos(): Promise<void> {
   const buildArgs = core.getInput("build-args") || "";
   const { bundleId, teamId: appleTeamId } = parsePbxproj(workingDirectory);
   const scheme = core.getInput("scheme") || "Runner";
-  const certPrivateKey = core.getInput("certificate-private-key", { required: true });
+  const certPrivateKey = core.getInput("certificate-private-key", { required: true }).replace(/\\n/g, "\n");
   const ascKeyId = core.getInput("asc-key-id", { required: true });
   const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
-  const ascPrivateKey = core.getInput("asc-private-key", { required: true });
+  const ascPrivateKey = core.getInput("asc-private-key", { required: true }).replace(/\\n/g, "\n");
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-ios-"));
 
