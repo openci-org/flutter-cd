@@ -25841,7 +25841,7 @@ async function buildP12FromCert(certContentBase64, privateKeyPath, tmpDir, passw
     fs.rmSync(p12Path, { force: true });
     return p12Base64;
 }
-async function createProvisioningProfile(jwt, certificateId, bundleIdentifier) {
+async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, profileType) {
     const bundleIdResponse = await ascApi(jwt, `/bundleIds?filter[identifier]=${bundleIdentifier}`);
     const bundleIds = bundleIdResponse?.data ?? [];
     if (bundleIds.length === 0) {
@@ -25861,11 +25861,12 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier) {
         .toISOString()
         .replace(/[:.]/g, "-")
         .substring(0, 19);
-    const profileName = `OpenCI AppStore ${bundleIdentifier} ${timestamp}`;
+    const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
+    const profileName = `OpenCI ${label} ${bundleIdentifier} ${timestamp}`;
     const response = await ascApi(jwt, "/profiles", "POST", {
         data: {
             type: "profiles",
-            attributes: { name: profileName, profileType: "IOS_APP_STORE" },
+            attributes: { name: profileName, profileType },
             relationships: {
                 bundleId: {
                     data: { type: "bundleIds", id: bundleIdResourceId },
@@ -26070,13 +26071,21 @@ const helpers_1 = __nccwpck_require__(1302);
 const asc_1 = __nccwpck_require__(6350);
 const KEYCHAIN_NAME = "openci-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
+const DEPLOY_CONFIG = {
+    testflight: { exportMethod: "app-store-connect", profileType: "IOS_APP_STORE", destination: "upload" },
+    firebase: { exportMethod: "ad-hoc", profileType: "IOS_APP_AD_HOC", destination: "export" },
+};
 async function buildAndSignIos() {
     const workingDirectory = core.getInput("working-directory") || ".";
     const buildArgs = core.getInput("build-args") || "";
     const bundleId = detectBundleId(workingDirectory);
     const appleTeamId = core.getInput("apple-team-id", { required: true });
     const scheme = core.getInput("scheme") || "Runner";
-    const uploadToTestflight = core.getInput("upload-to-testflight") !== "false";
+    const deployTo = (core.getInput("deploy-to") || "testflight");
+    if (!(deployTo in DEPLOY_CONFIG)) {
+        throw new Error(`Unsupported deploy-to: ${deployTo}. Use "testflight" or "firebase"`);
+    }
+    const deploy = DEPLOY_CONFIG[deployTo];
     const certPrivateKey = core.getInput("certificate-private-key", { required: true });
     const ascKeyId = core.getInput("asc-key-id", { required: true });
     const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
@@ -26087,6 +26096,7 @@ async function buildAndSignIos() {
         console.log(`   Bundle ID: ${bundleId}`);
         console.log(`   Apple Team ID: ${appleTeamId}`);
         console.log(`   Scheme: ${scheme}`);
+        console.log(`   Deploy to: ${deployTo}`);
         console.log("");
         // ── Step 1: Flutter build ───────────────────────────────
         core.startGroup("Step 1: Flutter build ios (no codesign)");
@@ -26110,7 +26120,7 @@ async function buildAndSignIos() {
         core.endGroup();
         // ── Step 4: Create provisioning profile ─────────────────
         core.startGroup("Step 4: Creating provisioning profile");
-        const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId);
+        const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, deploy.profileType);
         console.log(`  ✅ Profile created`);
         console.log(`     Name: ${profile.name}`);
         console.log(`     UUID: ${profile.uuid}`);
@@ -26138,7 +26148,7 @@ async function buildAndSignIos() {
         // ── Step 9: Generate ExportOptions.plist ────────────────
         core.startGroup("Step 9: Generating ExportOptions.plist");
         const exportOptionsPath = path.join(workingDirectory, "ExportOptions.plist");
-        generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid, uploadToTestflight);
+        generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid, deploy);
         console.log("  ✅ ExportOptions.plist generated");
         core.endGroup();
         // ── Step 10: Build archive ──────────────────────────────
@@ -26258,14 +26268,13 @@ function editXcodeProject(workingDirectory, bundleId, appleTeamId, profile) {
 // ══════════════════════════════════════════════════════════════
 // ExportOptions.plist
 // ══════════════════════════════════════════════════════════════
-function generateExportOptions(outputPath, teamId, bundleId, profileUuid, uploadToTestflight) {
-    const destination = uploadToTestflight ? "upload" : "export";
+function generateExportOptions(outputPath, teamId, bundleId, profileUuid, deploy) {
     const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>app-store-connect</string>
+    <string>${deploy.exportMethod}</string>
     <key>teamID</key>
     <string>${teamId}</string>
     <key>signingStyle</key>
@@ -26278,7 +26287,7 @@ function generateExportOptions(outputPath, teamId, bundleId, profileUuid, upload
     <key>signingCertificate</key>
     <string>Apple Distribution</string>
     <key>destination</key>
-    <string>${destination}</string>
+    <string>${deploy.destination}</string>
     <key>stripSwiftSymbols</key>
     <true/>
     <key>uploadSymbols</key>

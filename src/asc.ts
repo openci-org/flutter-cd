@@ -261,7 +261,8 @@ export interface ProfileResult {
 export async function createProvisioningProfile(
   jwt: string,
   certificateId: string,
-  bundleIdentifier: string
+  bundleIdentifier: string,
+  profileType: string
 ): Promise<ProfileResult> {
   const bundleIdResponse = await ascApi(
     jwt,
@@ -289,12 +290,13 @@ export async function createProvisioningProfile(
     .toISOString()
     .replace(/[:.]/g, "-")
     .substring(0, 19);
-  const profileName = `OpenCI AppStore ${bundleIdentifier} ${timestamp}`;
+  const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
+  const profileName = `OpenCI ${label} ${bundleIdentifier} ${timestamp}`;
 
   const response = await ascApi(jwt, "/profiles", "POST", {
     data: {
       type: "profiles",
-      attributes: { name: profileName, profileType: "IOS_APP_STORE" },
+      attributes: { name: profileName, profileType },
       relationships: {
         bundleId: {
           data: { type: "bundleIds", id: bundleIdResourceId },

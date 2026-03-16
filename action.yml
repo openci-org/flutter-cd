@@ -45,10 +45,10 @@ inputs:
     description: "Xcode scheme name (ios)"
     required: false
     default: "Runner"
-  upload-to-testflight:
-    description: "Upload the IPA to TestFlight after export (ios)"
+  deploy-to:
+    description: "Deployment target: testflight or firebase (ios)"
     required: false
-    default: "true"
+    default: "testflight"
 
 runs:
   using: node20

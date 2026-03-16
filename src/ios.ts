@@ -13,13 +13,24 @@ import {
 const KEYCHAIN_NAME = "openci-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
 
+type DeployTarget = "testflight" | "firebase";
+
+const DEPLOY_CONFIG: Record<DeployTarget, { exportMethod: string; profileType: string; destination: string }> = {
+  testflight: { exportMethod: "app-store-connect", profileType: "IOS_APP_STORE", destination: "upload" },
+  firebase:   { exportMethod: "ad-hoc",             profileType: "IOS_APP_AD_HOC", destination: "export" },
+};
+
 export async function buildAndSignIos(): Promise<void> {
   const workingDirectory = core.getInput("working-directory") || ".";
   const buildArgs = core.getInput("build-args") || "";
   const bundleId = detectBundleId(workingDirectory);
   const appleTeamId = core.getInput("apple-team-id", { required: true });
   const scheme = core.getInput("scheme") || "Runner";
-  const uploadToTestflight = core.getInput("upload-to-testflight") !== "false";
+  const deployTo = (core.getInput("deploy-to") || "testflight") as DeployTarget;
+  if (!(deployTo in DEPLOY_CONFIG)) {
+    throw new Error(`Unsupported deploy-to: ${deployTo}. Use "testflight" or "firebase"`);
+  }
+  const deploy = DEPLOY_CONFIG[deployTo];
   const certPrivateKey = core.getInput("certificate-private-key", { required: true });
   const ascKeyId = core.getInput("asc-key-id", { required: true });
   const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
@@ -32,6 +43,7 @@ export async function buildAndSignIos(): Promise<void> {
     console.log(`   Bundle ID: ${bundleId}`);
     console.log(`   Apple Team ID: ${appleTeamId}`);
     console.log(`   Scheme: ${scheme}`);
+    console.log(`   Deploy to: ${deployTo}`);
     console.log("");
 
     // ── Step 1: Flutter build ───────────────────────────────
@@ -59,7 +71,7 @@ export async function buildAndSignIos(): Promise<void> {
 
     // ── Step 4: Create provisioning profile ─────────────────
     core.startGroup("Step 4: Creating provisioning profile");
-    const profile = await createProvisioningProfile(jwt, cert.certificateId, bundleId);
+    const profile = await createProvisioningProfile(jwt, cert.certificateId, bundleId, deploy.profileType);
     console.log(`  ✅ Profile created`);
     console.log(`     Name: ${profile.name}`);
     console.log(`     UUID: ${profile.uuid}`);
@@ -92,13 +104,7 @@ export async function buildAndSignIos(): Promise<void> {
     // ── Step 9: Generate ExportOptions.plist ────────────────
     core.startGroup("Step 9: Generating ExportOptions.plist");
     const exportOptionsPath = path.join(workingDirectory, "ExportOptions.plist");
-    generateExportOptions(
-      exportOptionsPath,
-      appleTeamId,
-      bundleId,
-      profile.uuid,
-      uploadToTestflight
-    );
+    generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid, deploy);
     console.log("  ✅ ExportOptions.plist generated");
     core.endGroup();
 
@@ -287,15 +293,14 @@ function generateExportOptions(
   teamId: string,
   bundleId: string,
   profileUuid: string,
-  uploadToTestflight: boolean
+  deploy: { exportMethod: string; destination: string }
 ): void {
-  const destination = uploadToTestflight ? "upload" : "export";
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>app-store-connect</string>
+    <string>${deploy.exportMethod}</string>
     <key>teamID</key>
     <string>${teamId}</string>
     <key>signingStyle</key>
@@ -308,7 +313,7 @@ function generateExportOptions(
     <key>signingCertificate</key>
     <string>Apple Distribution</string>
     <key>destination</key>
-    <string>${destination}</string>
+    <string>${deploy.destination}</string>
     <key>stripSwiftSymbols</key>
     <true/>
     <key>uploadSymbols</key>
