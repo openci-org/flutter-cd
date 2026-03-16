@@ -25688,6 +25688,7 @@ exports.preflightCheck = preflightCheck;
 exports.getOrCreateCertificate = getOrCreateCertificate;
 exports.createProvisioningProfile = createProvisioningProfile;
 const fs = __importStar(__nccwpck_require__(9896));
+const https = __importStar(__nccwpck_require__(5692));
 const helpers_1 = __nccwpck_require__(1302);
 const ASC_API_BASE = "https://api.appstoreconnect.apple.com/v1";
 // ══════════════════════════════════════════════════════════════
@@ -25712,22 +25713,49 @@ async function generateAscJwt(keyId, issuerId, privateKeyPath) {
 // ══════════════════════════════════════════════════════════════
 async function ascApi(jwt, endpoint, method = "GET", body) {
     const url = `${ASC_API_BASE}${endpoint}`;
-    const args = [
-        "curl",
-        "-sf",
-        "-X", method,
-        "-H", `"Authorization: Bearer ${jwt}"`,
-        "-H", '"Content-Type: application/json"',
-    ];
-    if (body) {
-        const bodyJson = JSON.stringify(JSON.stringify(body));
-        args.push("-d", bodyJson);
+    const parsedUrl = new URL(url);
+    const options = {
+        hostname: parsedUrl.hostname,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method,
+        headers: {
+            "Authorization": `Bearer ${jwt}`,
+            "Content-Type": "application/json",
+        },
+    };
+    const bodyData = body ? JSON.stringify(body) : undefined;
+    if (bodyData) {
+        options.headers = {
+            ...options.headers,
+            "Content-Length": Buffer.byteLength(bodyData).toString(),
+        };
     }
-    args.push(`"${url}"`);
-    const output = await (0, helpers_1.execAndCapture)(args.join(" "));
-    if (!output.trim())
-        return null;
-    return JSON.parse(output);
+    return new Promise((resolve, reject) => {
+        const req = https.request(options, (res) => {
+            let data = "";
+            res.on("data", (chunk) => { data += chunk; });
+            res.on("end", () => {
+                if (res.statusCode && res.statusCode >= 400) {
+                    reject(new Error(`ASC API ${method} ${endpoint} returned ${res.statusCode}: ${data}`));
+                    return;
+                }
+                if (!data.trim()) {
+                    resolve(null);
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(data));
+                }
+                catch {
+                    reject(new Error(`Failed to parse ASC API response: ${data}`));
+                }
+            });
+        });
+        req.on("error", (e) => reject(new Error(`ASC API request failed: ${e.message}`)));
+        if (bodyData)
+            req.write(bodyData);
+        req.end();
+    });
 }
 // ══════════════════════════════════════════════════════════════
 // Preflight check - version & build number
