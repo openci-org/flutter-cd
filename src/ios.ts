@@ -5,6 +5,7 @@ import * as os from "os";
 import { exec } from "./helpers";
 import {
   generateAscJwt,
+  preflightCheck,
   getOrCreateCertificate,
   createProvisioningProfile,
   type ProfileResult,
@@ -31,72 +32,78 @@ export async function buildAndSignIos(): Promise<void> {
     console.log(`   Apple Team ID: ${appleTeamId}`);
     console.log(`   Scheme: ${scheme}`);
     console.log("");
-    console.log("");
 
-    // ── Step 1: Flutter build ───────────────────────────────
-    core.startGroup("Step 1: Flutter build ios (no codesign)");
-    await exec(`flutter build ios --no-codesign ${buildArgs}`.trim(), {
-      cwd: workingDirectory,
-    });
-    core.endGroup();
-
-    // ── Step 2: Generate ASC JWT ────────────────────────────
-    core.startGroup("Step 2: Generating App Store Connect JWT");
+    // ── Step 1: Generate ASC JWT ────────────────────────────
+    core.startGroup("Step 1: Generating App Store Connect JWT");
     const ascKeyPath = path.join(tmpDir, "AuthKey.p8");
     fs.writeFileSync(ascKeyPath, ascPrivateKey);
     const jwt = await generateAscJwt(ascKeyId, ascIssuerId, ascKeyPath);
     console.log("  ✅ JWT generated");
     core.endGroup();
 
-    // ── Step 3: Get or create distribution certificate ──────
-    core.startGroup("Step 3: Setting up distribution certificate");
+    // ── Step 2: Preflight check ─────────────────────────────
+    core.startGroup("Step 2: Preflight version check");
+    const { version, buildNumber } = parseVersion(workingDirectory);
+    console.log(`   Version: ${version}+${buildNumber}`);
+    await preflightCheck(jwt, bundleId, version, buildNumber);
+    core.endGroup();
+
+    // ── Step 3: Flutter build ───────────────────────────────
+    core.startGroup("Step 3: Flutter build ios (no codesign)");
+    await exec(`flutter build ios --no-codesign ${buildArgs}`.trim(), {
+      cwd: workingDirectory,
+    });
+    core.endGroup();
+
+    // ── Step 4: Get or create distribution certificate ──────
+    core.startGroup("Step 4: Setting up distribution certificate");
     const certKeyPath = path.join(tmpDir, "cert_key.pem");
     fs.writeFileSync(certKeyPath, certPrivateKey);
     const cert = await getOrCreateCertificate(jwt, certKeyPath, tmpDir);
     console.log(`  Certificate ID: ${cert.certificateId}`);
     core.endGroup();
 
-    // ── Step 4: Create provisioning profile ─────────────────
-    core.startGroup("Step 4: Creating provisioning profile");
+    // ── Step 5: Create provisioning profile ─────────────────
+    core.startGroup("Step 5: Creating provisioning profile");
     const profile = await createProvisioningProfile(jwt, cert.certificateId, bundleId, "IOS_APP_STORE");
     console.log(`  ✅ Profile created`);
     console.log(`     Name: ${profile.name}`);
     console.log(`     UUID: ${profile.uuid}`);
     core.endGroup();
 
-    // ── Step 5: Setup keychain ──────────────────────────────
-    core.startGroup("Step 5: Setting up temporary keychain");
+    // ── Step 6: Setup keychain ──────────────────────────────
+    core.startGroup("Step 6: Setting up temporary keychain");
     await setupKeychain();
     console.log("  ✅ Keychain created");
     core.endGroup();
 
-    // ── Step 6: Import certificate ──────────────────────────
-    core.startGroup("Step 6: Importing certificate");
+    // ── Step 7: Import certificate ──────────────────────────
+    core.startGroup("Step 7: Importing certificate");
     await importCertificate(cert.p12Base64, cert.password, tmpDir);
     console.log("  ✅ Certificate imported");
     core.endGroup();
 
-    // ── Step 7: Install provisioning profile ────────────────
-    core.startGroup("Step 7: Installing provisioning profile");
+    // ── Step 8: Install provisioning profile ────────────────
+    core.startGroup("Step 8: Installing provisioning profile");
     await installProvisioningProfile(profile, bundleId);
     console.log(`  ✅ Profile installed (UUID: ${profile.uuid})`);
     core.endGroup();
 
-    // ── Step 8: Edit xcodeproj ──────────────────────────────
-    core.startGroup("Step 8: Configuring Xcode project for manual signing");
+    // ── Step 9: Edit xcodeproj ──────────────────────────────
+    core.startGroup("Step 9: Configuring Xcode project for manual signing");
     editXcodeProject(workingDirectory, bundleId, appleTeamId, profile);
     console.log("  ✅ Xcode project updated for manual signing");
     core.endGroup();
 
-    // ── Step 9: Generate ExportOptions.plist ────────────────
-    core.startGroup("Step 9: Generating ExportOptions.plist");
+    // ── Step 10: Generate ExportOptions.plist ────────────────
+    core.startGroup("Step 10: Generating ExportOptions.plist");
     const exportOptionsPath = path.join(workingDirectory, "ExportOptions.plist");
     generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid);
     console.log("  ✅ ExportOptions.plist generated");
     core.endGroup();
 
-    // ── Step 10: Build archive ──────────────────────────────
-    core.startGroup("Step 10: Building archive");
+    // ── Step 11: Build archive ──────────────────────────────
+    core.startGroup("Step 11: Building archive");
     console.log("  ⏳ This may take several minutes...");
     const archivePath = path.join(workingDirectory, "build", `${scheme}.xcarchive`);
     await exec(
@@ -117,8 +124,8 @@ export async function buildAndSignIos(): Promise<void> {
     console.log("  ✅ Archive created");
     core.endGroup();
 
-    // ── Step 11: Export IPA ──────────────────────────────────
-    core.startGroup("Step 11: Exporting IPA");
+    // ── Step 12: Export IPA ──────────────────────────────────
+    core.startGroup("Step 12: Exporting IPA");
     const privateKeysDir = path.join(os.homedir(), "private_keys");
     fs.mkdirSync(privateKeysDir, { recursive: true });
     const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
@@ -351,4 +358,25 @@ function parsePbxproj(workingDirectory: string): { bundleId: string; teamId: str
   console.log(`  👥 Auto-detected team ID: ${teamIds[0]}`);
 
   return { bundleId: bundleIds[0], teamId: teamIds[0] };
+}
+
+// ══════════════════════════════════════════════════════════════
+// Version parsing
+// ══════════════════════════════════════════════════════════════
+
+function parseVersion(workingDirectory: string): { version: string; buildNumber: string } {
+  const pubspecPath = path.join(workingDirectory, "pubspec.yaml");
+  if (!fs.existsSync(pubspecPath)) {
+    throw new Error("pubspec.yaml not found");
+  }
+
+  const content = fs.readFileSync(pubspecPath, "utf-8");
+  const match = content.match(/^version:\s*(\S+)/m);
+  if (!match) {
+    throw new Error("version not found in pubspec.yaml");
+  }
+
+  const raw = match[1];
+  const [version, buildNumber] = raw.includes("+") ? raw.split("+") : [raw, "1"];
+  return { version, buildNumber };
 }

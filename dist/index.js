@@ -25684,6 +25684,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.generateAscJwt = generateAscJwt;
 exports.ascApi = ascApi;
+exports.preflightCheck = preflightCheck;
 exports.getOrCreateCertificate = getOrCreateCertificate;
 exports.createProvisioningProfile = createProvisioningProfile;
 const fs = __importStar(__nccwpck_require__(9896));
@@ -25727,6 +25728,25 @@ async function ascApi(jwt, endpoint, method = "GET", body) {
     if (!output.trim())
         return null;
     return JSON.parse(output);
+}
+// ══════════════════════════════════════════════════════════════
+// Preflight check - version & build number
+// ══════════════════════════════════════════════════════════════
+async function preflightCheck(jwt, bundleId, version, buildNumber) {
+    console.log(`  Checking version ${version} (${buildNumber}) for ${bundleId}...`);
+    const appsResponse = await ascApi(jwt, `/apps?filter[bundleId]=${bundleId}`);
+    const apps = appsResponse?.data ?? [];
+    if (apps.length === 0) {
+        throw new Error(`App not found in App Store Connect for bundle ID: ${bundleId}. Create the app in ASC first.`);
+    }
+    const appId = apps[0].id;
+    console.log(`  ✅ App found in ASC (ID: ${appId})`);
+    const buildsResponse = await ascApi(jwt, `/builds?filter[app]=${appId}&filter[version]=${buildNumber}&filter[preReleaseVersion.version]=${version}&limit=1`);
+    const builds = buildsResponse?.data ?? [];
+    if (builds.length > 0) {
+        throw new Error(`Build ${version}+${buildNumber} already exists in App Store Connect. Increment the build number in pubspec.yaml.`);
+    }
+    console.log(`  ✅ Version ${version}+${buildNumber} is available for upload`);
 }
 /**
  * Try to find an existing valid DISTRIBUTION certificate.
@@ -26087,62 +26107,67 @@ async function buildAndSignIos() {
         console.log(`   Apple Team ID: ${appleTeamId}`);
         console.log(`   Scheme: ${scheme}`);
         console.log("");
-        console.log("");
-        // ── Step 1: Flutter build ───────────────────────────────
-        core.startGroup("Step 1: Flutter build ios (no codesign)");
-        await (0, helpers_1.exec)(`flutter build ios --no-codesign ${buildArgs}`.trim(), {
-            cwd: workingDirectory,
-        });
-        core.endGroup();
-        // ── Step 2: Generate ASC JWT ────────────────────────────
-        core.startGroup("Step 2: Generating App Store Connect JWT");
+        // ── Step 1: Generate ASC JWT ────────────────────────────
+        core.startGroup("Step 1: Generating App Store Connect JWT");
         const ascKeyPath = path.join(tmpDir, "AuthKey.p8");
         fs.writeFileSync(ascKeyPath, ascPrivateKey);
         const jwt = await (0, asc_1.generateAscJwt)(ascKeyId, ascIssuerId, ascKeyPath);
         console.log("  ✅ JWT generated");
         core.endGroup();
-        // ── Step 3: Get or create distribution certificate ──────
-        core.startGroup("Step 3: Setting up distribution certificate");
+        // ── Step 2: Preflight check ─────────────────────────────
+        core.startGroup("Step 2: Preflight version check");
+        const { version, buildNumber } = parseVersion(workingDirectory);
+        console.log(`   Version: ${version}+${buildNumber}`);
+        await (0, asc_1.preflightCheck)(jwt, bundleId, version, buildNumber);
+        core.endGroup();
+        // ── Step 3: Flutter build ───────────────────────────────
+        core.startGroup("Step 3: Flutter build ios (no codesign)");
+        await (0, helpers_1.exec)(`flutter build ios --no-codesign ${buildArgs}`.trim(), {
+            cwd: workingDirectory,
+        });
+        core.endGroup();
+        // ── Step 4: Get or create distribution certificate ──────
+        core.startGroup("Step 4: Setting up distribution certificate");
         const certKeyPath = path.join(tmpDir, "cert_key.pem");
         fs.writeFileSync(certKeyPath, certPrivateKey);
         const cert = await (0, asc_1.getOrCreateCertificate)(jwt, certKeyPath, tmpDir);
         console.log(`  Certificate ID: ${cert.certificateId}`);
         core.endGroup();
-        // ── Step 4: Create provisioning profile ─────────────────
-        core.startGroup("Step 4: Creating provisioning profile");
+        // ── Step 5: Create provisioning profile ─────────────────
+        core.startGroup("Step 5: Creating provisioning profile");
         const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, "IOS_APP_STORE");
         console.log(`  ✅ Profile created`);
         console.log(`     Name: ${profile.name}`);
         console.log(`     UUID: ${profile.uuid}`);
         core.endGroup();
-        // ── Step 5: Setup keychain ──────────────────────────────
-        core.startGroup("Step 5: Setting up temporary keychain");
+        // ── Step 6: Setup keychain ──────────────────────────────
+        core.startGroup("Step 6: Setting up temporary keychain");
         await setupKeychain();
         console.log("  ✅ Keychain created");
         core.endGroup();
-        // ── Step 6: Import certificate ──────────────────────────
-        core.startGroup("Step 6: Importing certificate");
+        // ── Step 7: Import certificate ──────────────────────────
+        core.startGroup("Step 7: Importing certificate");
         await importCertificate(cert.p12Base64, cert.password, tmpDir);
         console.log("  ✅ Certificate imported");
         core.endGroup();
-        // ── Step 7: Install provisioning profile ────────────────
-        core.startGroup("Step 7: Installing provisioning profile");
+        // ── Step 8: Install provisioning profile ────────────────
+        core.startGroup("Step 8: Installing provisioning profile");
         await installProvisioningProfile(profile, bundleId);
         console.log(`  ✅ Profile installed (UUID: ${profile.uuid})`);
         core.endGroup();
-        // ── Step 8: Edit xcodeproj ──────────────────────────────
-        core.startGroup("Step 8: Configuring Xcode project for manual signing");
+        // ── Step 9: Edit xcodeproj ──────────────────────────────
+        core.startGroup("Step 9: Configuring Xcode project for manual signing");
         editXcodeProject(workingDirectory, bundleId, appleTeamId, profile);
         console.log("  ✅ Xcode project updated for manual signing");
         core.endGroup();
-        // ── Step 9: Generate ExportOptions.plist ────────────────
-        core.startGroup("Step 9: Generating ExportOptions.plist");
+        // ── Step 10: Generate ExportOptions.plist ────────────────
+        core.startGroup("Step 10: Generating ExportOptions.plist");
         const exportOptionsPath = path.join(workingDirectory, "ExportOptions.plist");
         generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid);
         console.log("  ✅ ExportOptions.plist generated");
         core.endGroup();
-        // ── Step 10: Build archive ──────────────────────────────
-        core.startGroup("Step 10: Building archive");
+        // ── Step 11: Build archive ──────────────────────────────
+        core.startGroup("Step 11: Building archive");
         console.log("  ⏳ This may take several minutes...");
         const archivePath = path.join(workingDirectory, "build", `${scheme}.xcarchive`);
         await (0, helpers_1.exec)([
@@ -26159,8 +26184,8 @@ async function buildAndSignIos() {
         ].join(" "), { cwd: workingDirectory });
         console.log("  ✅ Archive created");
         core.endGroup();
-        // ── Step 11: Export IPA ──────────────────────────────────
-        core.startGroup("Step 11: Exporting IPA");
+        // ── Step 12: Export IPA ──────────────────────────────────
+        core.startGroup("Step 12: Exporting IPA");
         const privateKeysDir = path.join(os.homedir(), "private_keys");
         fs.mkdirSync(privateKeysDir, { recursive: true });
         const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
@@ -26313,6 +26338,23 @@ function parsePbxproj(workingDirectory) {
     console.log(`  📦 Auto-detected bundle ID: ${bundleIds[0]}`);
     console.log(`  👥 Auto-detected team ID: ${teamIds[0]}`);
     return { bundleId: bundleIds[0], teamId: teamIds[0] };
+}
+// ══════════════════════════════════════════════════════════════
+// Version parsing
+// ══════════════════════════════════════════════════════════════
+function parseVersion(workingDirectory) {
+    const pubspecPath = path.join(workingDirectory, "pubspec.yaml");
+    if (!fs.existsSync(pubspecPath)) {
+        throw new Error("pubspec.yaml not found");
+    }
+    const content = fs.readFileSync(pubspecPath, "utf-8");
+    const match = content.match(/^version:\s*(\S+)/m);
+    if (!match) {
+        throw new Error("version not found in pubspec.yaml");
+    }
+    const raw = match[1];
+    const [version, buildNumber] = raw.includes("+") ? raw.split("+") : [raw, "1"];
+    return { version, buildNumber };
 }
 
 
