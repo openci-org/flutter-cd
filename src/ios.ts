@@ -5,8 +5,7 @@ import * as os from "os";
 import { exec } from "./helpers";
 import {
   generateAscJwt,
-  validateCertificate,
-  createCertificateWithP12,
+  getOrCreateCertificate,
   createProvisioningProfile,
   type ProfileResult,
 } from "./asc";
@@ -21,13 +20,10 @@ export async function buildAndSignIos(): Promise<void> {
   const appleTeamId = core.getInput("apple-team-id", { required: true });
   const scheme = core.getInput("scheme") || "Runner";
   const uploadToTestflight = core.getInput("upload-to-testflight") !== "false";
+  const certPrivateKey = core.getInput("certificate-private-key", { required: true });
   const ascKeyId = core.getInput("asc-key-id", { required: true });
   const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
   const ascPrivateKey = core.getInput("asc-private-key", { required: true });
-  const existingCertP12 = core.getInput("distribution-certificate-p12") || "";
-  const existingCertId = core.getInput("distribution-certificate-id") || "";
-  const existingCertPassword =
-    core.getInput("distribution-certificate-password") || "openci";
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-ios-"));
 
@@ -47,53 +43,23 @@ export async function buildAndSignIos(): Promise<void> {
 
     // ── Step 2: Generate ASC JWT ────────────────────────────
     core.startGroup("Step 2: Generating App Store Connect JWT");
-    const keyPath = path.join(tmpDir, "AuthKey.p8");
-    fs.writeFileSync(keyPath, ascPrivateKey);
-    const jwt = await generateAscJwt(ascKeyId, ascIssuerId, keyPath);
+    const ascKeyPath = path.join(tmpDir, "AuthKey.p8");
+    fs.writeFileSync(ascKeyPath, ascPrivateKey);
+    const jwt = await generateAscJwt(ascKeyId, ascIssuerId, ascKeyPath);
     console.log("  ✅ JWT generated");
     core.endGroup();
 
-    // ── Step 3: Handle distribution certificate ─────────────
+    // ── Step 3: Get or create distribution certificate ──────
     core.startGroup("Step 3: Setting up distribution certificate");
-
-    let certP12Base64: string;
-    let certPassword: string;
-    let certificateId: string;
-    let isNewCert = false;
-
-    const hasExistingCert = existingCertP12 !== "" && existingCertId !== "";
-
-    if (hasExistingCert) {
-      console.log(`  Validating existing certificate (ID: ${existingCertId})...`);
-      const isValid = await validateCertificate(jwt, existingCertId);
-      if (isValid) {
-        console.log("  ✅ Using existing valid certificate");
-        certP12Base64 = existingCertP12;
-        certPassword = existingCertPassword;
-        certificateId = existingCertId;
-      } else {
-        console.log("  ⚠️  Certificate expired/revoked, creating new...");
-        const result = await createCertificateWithP12(jwt, tmpDir);
-        certP12Base64 = result.p12Base64;
-        certPassword = result.password;
-        certificateId = result.certificateId;
-        isNewCert = true;
-      }
-    } else {
-      console.log("  No existing certificate found, creating new...");
-      const result = await createCertificateWithP12(jwt, tmpDir);
-      certP12Base64 = result.p12Base64;
-      certPassword = result.password;
-      certificateId = result.certificateId;
-      isNewCert = true;
-    }
-
-    console.log(`  ✅ Certificate ready (ID: ${certificateId})`);
+    const certKeyPath = path.join(tmpDir, "cert_key.pem");
+    fs.writeFileSync(certKeyPath, certPrivateKey);
+    const cert = await getOrCreateCertificate(jwt, certKeyPath, tmpDir);
+    console.log(`  Certificate ID: ${cert.certificateId}`);
     core.endGroup();
 
     // ── Step 4: Create provisioning profile ─────────────────
     core.startGroup("Step 4: Creating provisioning profile");
-    const profile = await createProvisioningProfile(jwt, certificateId, bundleId);
+    const profile = await createProvisioningProfile(jwt, cert.certificateId, bundleId);
     console.log(`  ✅ Profile created`);
     console.log(`     Name: ${profile.name}`);
     console.log(`     UUID: ${profile.uuid}`);
@@ -107,7 +73,7 @@ export async function buildAndSignIos(): Promise<void> {
 
     // ── Step 6: Import certificate ──────────────────────────
     core.startGroup("Step 6: Importing certificate");
-    await importCertificate(certP12Base64, certPassword, tmpDir);
+    await importCertificate(cert.p12Base64, cert.password, tmpDir);
     console.log("  ✅ Certificate imported");
     core.endGroup();
 
@@ -163,7 +129,7 @@ export async function buildAndSignIos(): Promise<void> {
     const privateKeysDir = path.join(os.homedir(), "private_keys");
     fs.mkdirSync(privateKeysDir, { recursive: true });
     const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
-    fs.copyFileSync(keyPath, apiKeyDest);
+    fs.copyFileSync(ascKeyPath, apiKeyDest);
 
     const exportPath = path.join(workingDirectory, "build");
     await exec(
@@ -188,17 +154,6 @@ export async function buildAndSignIos(): Promise<void> {
     fs.rmSync(apiKeyDest, { force: true });
     console.log("  ✅ Temporary keychain and API key removed");
     core.endGroup();
-
-    // ── Output new certificate info ─────────────────────────
-    if (isNewCert) {
-      console.log("");
-      console.log("💾 New certificate was created. Save these as secrets for reuse:");
-      console.log(`   OPENCI_DISTRIBUTION_CERTIFICATE_ID=${certificateId}`);
-      console.log(
-        `   OPENCI_DISTRIBUTION_CERTIFICATE_P12=<base64, ${certP12Base64.length} chars>`
-      );
-      console.log(`   OPENCI_DISTRIBUTION_CERTIFICATE_PASSWORD=${certPassword}`);
-    }
 
     console.log("");
     console.log("🎉 iOS Sign & Build complete!");
@@ -256,7 +211,6 @@ async function installProvisioningProfile(
   );
   fs.mkdirSync(profileDir, { recursive: true });
 
-  // Remove old OpenCI profiles for this bundle ID
   const files = fs.readdirSync(profileDir);
   for (const file of files) {
     if (!file.endsWith(".mobileprovision")) continue;

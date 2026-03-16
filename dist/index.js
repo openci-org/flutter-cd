@@ -25644,16 +25644,49 @@ module.exports = {
 /***/ }),
 
 /***/ 6350:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.generateAscJwt = generateAscJwt;
 exports.ascApi = ascApi;
-exports.validateCertificate = validateCertificate;
-exports.createCertificateWithP12 = createCertificateWithP12;
+exports.getOrCreateCertificate = getOrCreateCertificate;
 exports.createProvisioningProfile = createProvisioningProfile;
+const fs = __importStar(__nccwpck_require__(9896));
 const helpers_1 = __nccwpck_require__(1302);
 const ASC_API_BASE = "https://api.appstoreconnect.apple.com/v1";
 // ══════════════════════════════════════════════════════════════
@@ -25695,30 +25728,44 @@ async function ascApi(jwt, endpoint, method = "GET", body) {
         return null;
     return JSON.parse(output);
 }
-async function validateCertificate(jwt, certId) {
-    try {
-        const response = await ascApi(jwt, `/certificates/${certId}`);
-        const expDate = new Date(response.data.attributes.expirationDate);
+/**
+ * Try to find an existing valid DISTRIBUTION certificate.
+ * If found, download and create a p12 with the provided private key.
+ * If not found, create a new one using CSR from the provided key.
+ */
+async function getOrCreateCertificate(jwt, certPrivateKeyPath, tmpDir) {
+    const password = "openci";
+    const existingCerts = await ascApi(jwt, "/certificates?filter[certificateType]=DISTRIBUTION");
+    const certs = existingCerts?.data ?? [];
+    const validCerts = certs.filter((cert) => {
+        const expDate = new Date(cert.attributes.expirationDate);
         return expDate > new Date();
+    });
+    if (validCerts.length > 0) {
+        console.log(`  Found ${validCerts.length} valid certificate(s), trying to reuse...`);
+        for (const cert of validCerts) {
+            try {
+                const p12 = await buildP12FromCert(cert.attributes.certificateContent, certPrivateKeyPath, tmpDir, password);
+                console.log(`  ✅ Reusing existing certificate (ID: ${cert.id})`);
+                return { certificateId: cert.id, p12Base64: p12, password };
+            }
+            catch {
+                console.log(`  ⚠️  Certificate ${cert.id} doesn't match this private key, skipping`);
+            }
+        }
+        console.log("  No matching certificate found, creating new...");
     }
-    catch {
-        return false;
+    else {
+        console.log("  No valid certificates found, creating new...");
     }
+    return createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password);
 }
-async function createCertificateWithP12(jwt, tmpDir) {
-    const keyPath = `${tmpDir}/key.pem`;
+async function createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password) {
     const csrPemPath = `${tmpDir}/csr.pem`;
     const csrDerPath = `${tmpDir}/csr.der`;
-    const certDerPath = `${tmpDir}/cert.der`;
-    const certPemPath = `${tmpDir}/cert.pem`;
-    const p12Path = `${tmpDir}/cert.p12`;
-    const password = "openci";
-    // Generate RSA key and CSR
-    await (0, helpers_1.exec)(`openssl req -new -newkey rsa:2048 -nodes -keyout "${keyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI Distribution/C=JP/O=OpenCI"`, { silent: true });
-    // Convert CSR PEM → DER → Base64
+    await (0, helpers_1.exec)(`openssl req -new -key "${certPrivateKeyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI Distribution/C=JP/O=OpenCI"`, { silent: true });
     await (0, helpers_1.exec)(`openssl req -in "${csrPemPath}" -outform DER -out "${csrDerPath}"`, { silent: true });
     const csrBase64 = (await (0, helpers_1.execAndCapture)(`base64 -i "${csrDerPath}"`)).replace(/\n/g, "");
-    // Check existing certificate count & create
     let certResponse;
     try {
         certResponse = await ascApi(jwt, "/certificates", "POST", {
@@ -25736,9 +25783,9 @@ async function createCertificateWithP12(jwt, tmpDir) {
         if (msg.includes("409") || msg.includes("CONFLICT")) {
             console.log("  ⚠️  Certificate limit reached, deleting oldest...");
             const existing = await ascApi(jwt, "/certificates?filter[certificateType]=DISTRIBUTION");
-            const certs = existing?.data ?? [];
-            if (certs.length > 0) {
-                const oldest = certs[certs.length - 1];
+            const allCerts = existing?.data ?? [];
+            if (allCerts.length > 0) {
+                const oldest = allCerts[allCerts.length - 1];
                 console.log(`  🗑️  Deleting: ${oldest.id}`);
                 await ascApi(jwt, `/certificates/${oldest.id}`, "DELETE").catch(() => { });
                 certResponse = await ascApi(jwt, "/certificates", "POST", {
@@ -25761,29 +25808,46 @@ async function createCertificateWithP12(jwt, tmpDir) {
     }
     const certId = certResponse.data.id;
     const certContent = certResponse.data.attributes.certificateContent;
-    // Write DER cert & convert to PEM
-    const fs = __nccwpck_require__(9896);
-    fs.writeFileSync(certDerPath, Buffer.from(certContent, "base64"));
+    const p12 = await buildP12FromCert(certContent, certPrivateKeyPath, tmpDir, password);
+    console.log(`  ✅ New certificate created (ID: ${certId})`);
+    return { certificateId: certId, p12Base64: p12, password };
+}
+async function buildP12FromCert(certContentBase64, privateKeyPath, tmpDir, password) {
+    const certDerPath = `${tmpDir}/cert.der`;
+    const certPemPath = `${tmpDir}/cert.pem`;
+    const p12Path = `${tmpDir}/cert.p12`;
+    fs.writeFileSync(certDerPath, Buffer.from(certContentBase64, "base64"));
     await (0, helpers_1.exec)(`openssl x509 -inform DER -in "${certDerPath}" -out "${certPemPath}"`, { silent: true });
+    // Verify the key matches the certificate
+    const certModulus = await (0, helpers_1.execAndCapture)(`openssl x509 -noout -modulus -in "${certPemPath}"`);
+    const keyModulus = await (0, helpers_1.execAndCapture)(`openssl rsa -noout -modulus -in "${privateKeyPath}"`);
+    if (certModulus.trim() !== keyModulus.trim()) {
+        // Cleanup temp files
+        fs.rmSync(certDerPath, { force: true });
+        fs.rmSync(certPemPath, { force: true });
+        throw new Error("Certificate does not match the provided private key");
+    }
     // Create .p12 (try without -legacy first for LibreSSL, then with -legacy for OpenSSL 3.x)
     try {
-        await (0, helpers_1.exec)(`openssl pkcs12 -export -out "${p12Path}" -inkey "${keyPath}" -in "${certPemPath}" -password "pass:${password}" -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`, { silent: true });
+        await (0, helpers_1.exec)(`openssl pkcs12 -export -out "${p12Path}" -inkey "${privateKeyPath}" -in "${certPemPath}" -password "pass:${password}" -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`, { silent: true });
     }
     catch {
-        await (0, helpers_1.exec)(`openssl pkcs12 -export -out "${p12Path}" -inkey "${keyPath}" -in "${certPemPath}" -password "pass:${password}" -legacy -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`, { silent: true });
+        await (0, helpers_1.exec)(`openssl pkcs12 -export -out "${p12Path}" -inkey "${privateKeyPath}" -in "${certPemPath}" -password "pass:${password}" -legacy -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`, { silent: true });
     }
     const p12Base64 = (await (0, helpers_1.execAndCapture)(`base64 -i "${p12Path}"`)).replace(/\n/g, "");
-    return { certificateId: certId, p12Base64, password };
+    // Cleanup
+    fs.rmSync(certDerPath, { force: true });
+    fs.rmSync(certPemPath, { force: true });
+    fs.rmSync(p12Path, { force: true });
+    return p12Base64;
 }
 async function createProvisioningProfile(jwt, certificateId, bundleIdentifier) {
-    // Get Bundle ID resource
     const bundleIdResponse = await ascApi(jwt, `/bundleIds?filter[identifier]=${bundleIdentifier}`);
     const bundleIds = bundleIdResponse?.data ?? [];
     if (bundleIds.length === 0) {
         throw new Error(`Bundle ID not found: ${bundleIdentifier}. Register it in Apple Developer Portal first.`);
     }
     const bundleIdResourceId = bundleIds[0].id;
-    // Delete stale OpenCI profiles
     const allProfiles = await ascApi(jwt, "/profiles?limit=200");
     const profiles = allProfiles?.data ?? [];
     for (const profile of profiles) {
@@ -25793,7 +25857,6 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier) {
             await ascApi(jwt, `/profiles/${profile.id}`, "DELETE").catch(() => { });
         }
     }
-    // Create new profile
     const timestamp = new Date()
         .toISOString()
         .replace(/[:.]/g, "-")
@@ -26014,12 +26077,10 @@ async function buildAndSignIos() {
     const appleTeamId = core.getInput("apple-team-id", { required: true });
     const scheme = core.getInput("scheme") || "Runner";
     const uploadToTestflight = core.getInput("upload-to-testflight") !== "false";
+    const certPrivateKey = core.getInput("certificate-private-key", { required: true });
     const ascKeyId = core.getInput("asc-key-id", { required: true });
     const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
     const ascPrivateKey = core.getInput("asc-private-key", { required: true });
-    const existingCertP12 = core.getInput("distribution-certificate-p12") || "";
-    const existingCertId = core.getInput("distribution-certificate-id") || "";
-    const existingCertPassword = core.getInput("distribution-certificate-password") || "openci";
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-ios-"));
     try {
         console.log("🚀 OpenCI iOS Sign & Build");
@@ -26035,49 +26096,21 @@ async function buildAndSignIos() {
         core.endGroup();
         // ── Step 2: Generate ASC JWT ────────────────────────────
         core.startGroup("Step 2: Generating App Store Connect JWT");
-        const keyPath = path.join(tmpDir, "AuthKey.p8");
-        fs.writeFileSync(keyPath, ascPrivateKey);
-        const jwt = await (0, asc_1.generateAscJwt)(ascKeyId, ascIssuerId, keyPath);
+        const ascKeyPath = path.join(tmpDir, "AuthKey.p8");
+        fs.writeFileSync(ascKeyPath, ascPrivateKey);
+        const jwt = await (0, asc_1.generateAscJwt)(ascKeyId, ascIssuerId, ascKeyPath);
         console.log("  ✅ JWT generated");
         core.endGroup();
-        // ── Step 3: Handle distribution certificate ─────────────
+        // ── Step 3: Get or create distribution certificate ──────
         core.startGroup("Step 3: Setting up distribution certificate");
-        let certP12Base64;
-        let certPassword;
-        let certificateId;
-        let isNewCert = false;
-        const hasExistingCert = existingCertP12 !== "" && existingCertId !== "";
-        if (hasExistingCert) {
-            console.log(`  Validating existing certificate (ID: ${existingCertId})...`);
-            const isValid = await (0, asc_1.validateCertificate)(jwt, existingCertId);
-            if (isValid) {
-                console.log("  ✅ Using existing valid certificate");
-                certP12Base64 = existingCertP12;
-                certPassword = existingCertPassword;
-                certificateId = existingCertId;
-            }
-            else {
-                console.log("  ⚠️  Certificate expired/revoked, creating new...");
-                const result = await (0, asc_1.createCertificateWithP12)(jwt, tmpDir);
-                certP12Base64 = result.p12Base64;
-                certPassword = result.password;
-                certificateId = result.certificateId;
-                isNewCert = true;
-            }
-        }
-        else {
-            console.log("  No existing certificate found, creating new...");
-            const result = await (0, asc_1.createCertificateWithP12)(jwt, tmpDir);
-            certP12Base64 = result.p12Base64;
-            certPassword = result.password;
-            certificateId = result.certificateId;
-            isNewCert = true;
-        }
-        console.log(`  ✅ Certificate ready (ID: ${certificateId})`);
+        const certKeyPath = path.join(tmpDir, "cert_key.pem");
+        fs.writeFileSync(certKeyPath, certPrivateKey);
+        const cert = await (0, asc_1.getOrCreateCertificate)(jwt, certKeyPath, tmpDir);
+        console.log(`  Certificate ID: ${cert.certificateId}`);
         core.endGroup();
         // ── Step 4: Create provisioning profile ─────────────────
         core.startGroup("Step 4: Creating provisioning profile");
-        const profile = await (0, asc_1.createProvisioningProfile)(jwt, certificateId, bundleId);
+        const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId);
         console.log(`  ✅ Profile created`);
         console.log(`     Name: ${profile.name}`);
         console.log(`     UUID: ${profile.uuid}`);
@@ -26089,7 +26122,7 @@ async function buildAndSignIos() {
         core.endGroup();
         // ── Step 6: Import certificate ──────────────────────────
         core.startGroup("Step 6: Importing certificate");
-        await importCertificate(certP12Base64, certPassword, tmpDir);
+        await importCertificate(cert.p12Base64, cert.password, tmpDir);
         console.log("  ✅ Certificate imported");
         core.endGroup();
         // ── Step 7: Install provisioning profile ────────────────
@@ -26131,7 +26164,7 @@ async function buildAndSignIos() {
         const privateKeysDir = path.join(os.homedir(), "private_keys");
         fs.mkdirSync(privateKeysDir, { recursive: true });
         const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
-        fs.copyFileSync(keyPath, apiKeyDest);
+        fs.copyFileSync(ascKeyPath, apiKeyDest);
         const exportPath = path.join(workingDirectory, "build");
         await (0, helpers_1.exec)([
             "xcodebuild -exportArchive -quiet",
@@ -26151,14 +26184,6 @@ async function buildAndSignIos() {
         fs.rmSync(apiKeyDest, { force: true });
         console.log("  ✅ Temporary keychain and API key removed");
         core.endGroup();
-        // ── Output new certificate info ─────────────────────────
-        if (isNewCert) {
-            console.log("");
-            console.log("💾 New certificate was created. Save these as secrets for reuse:");
-            console.log(`   OPENCI_DISTRIBUTION_CERTIFICATE_ID=${certificateId}`);
-            console.log(`   OPENCI_DISTRIBUTION_CERTIFICATE_P12=<base64, ${certP12Base64.length} chars>`);
-            console.log(`   OPENCI_DISTRIBUTION_CERTIFICATE_PASSWORD=${certPassword}`);
-        }
         console.log("");
         console.log("🎉 iOS Sign & Build complete!");
         console.log(`   IPA: ${exportPath}/${scheme}.ipa`);
@@ -26195,7 +26220,6 @@ async function cleanupKeychain() {
 async function installProvisioningProfile(profile, bundleId) {
     const profileDir = path.join(os.homedir(), "Library/MobileDevice/Provisioning Profiles");
     fs.mkdirSync(profileDir, { recursive: true });
-    // Remove old OpenCI profiles for this bundle ID
     const files = fs.readdirSync(profileDir);
     for (const file of files) {
         if (!file.endsWith(".mobileprovision"))

@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import { exec, execAndCapture } from "./helpers";
 
 const ASC_API_BASE = "https://api.appstoreconnect.apple.com/v1";
@@ -65,7 +66,7 @@ export async function ascApi(
 }
 
 // ══════════════════════════════════════════════════════════════
-// Certificate
+// Certificate - using persistent private key
 // ══════════════════════════════════════════════════════════════
 
 interface CertificateResult {
@@ -74,45 +75,75 @@ interface CertificateResult {
   password: string;
 }
 
-export async function validateCertificate(
+/**
+ * Try to find an existing valid DISTRIBUTION certificate.
+ * If found, download and create a p12 with the provided private key.
+ * If not found, create a new one using CSR from the provided key.
+ */
+export async function getOrCreateCertificate(
   jwt: string,
-  certId: string
-): Promise<boolean> {
-  try {
-    const response = await ascApi(jwt, `/certificates/${certId}`);
-    const expDate = new Date(response.data.attributes.expirationDate);
-    return expDate > new Date();
-  } catch {
-    return false;
-  }
-}
-
-export async function createCertificateWithP12(
-  jwt: string,
+  certPrivateKeyPath: string,
   tmpDir: string
 ): Promise<CertificateResult> {
-  const keyPath = `${tmpDir}/key.pem`;
-  const csrPemPath = `${tmpDir}/csr.pem`;
-  const csrDerPath = `${tmpDir}/csr.der`;
-  const certDerPath = `${tmpDir}/cert.der`;
-  const certPemPath = `${tmpDir}/cert.pem`;
-  const p12Path = `${tmpDir}/cert.p12`;
   const password = "openci";
 
-  // Generate RSA key and CSR
+  const existingCerts = await ascApi(
+    jwt,
+    "/certificates?filter[certificateType]=DISTRIBUTION"
+  );
+  const certs = existingCerts?.data ?? [];
+
+  const validCerts = certs.filter((cert: any) => {
+    const expDate = new Date(cert.attributes.expirationDate);
+    return expDate > new Date();
+  });
+
+  if (validCerts.length > 0) {
+    console.log(`  Found ${validCerts.length} valid certificate(s), trying to reuse...`);
+
+    for (const cert of validCerts) {
+      try {
+        const p12 = await buildP12FromCert(
+          cert.attributes.certificateContent,
+          certPrivateKeyPath,
+          tmpDir,
+          password
+        );
+        console.log(`  ✅ Reusing existing certificate (ID: ${cert.id})`);
+        return { certificateId: cert.id, p12Base64: p12, password };
+      } catch {
+        console.log(`  ⚠️  Certificate ${cert.id} doesn't match this private key, skipping`);
+      }
+    }
+
+    console.log("  No matching certificate found, creating new...");
+  } else {
+    console.log("  No valid certificates found, creating new...");
+  }
+
+  return createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password);
+}
+
+async function createNewCertificate(
+  jwt: string,
+  certPrivateKeyPath: string,
+  tmpDir: string,
+  password: string
+): Promise<CertificateResult> {
+  const csrPemPath = `${tmpDir}/csr.pem`;
+  const csrDerPath = `${tmpDir}/csr.der`;
+
   await exec(
-    `openssl req -new -newkey rsa:2048 -nodes -keyout "${keyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI Distribution/C=JP/O=OpenCI"`,
+    `openssl req -new -key "${certPrivateKeyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI Distribution/C=JP/O=OpenCI"`,
     { silent: true }
   );
 
-  // Convert CSR PEM → DER → Base64
   await exec(
     `openssl req -in "${csrPemPath}" -outform DER -out "${csrDerPath}"`,
     { silent: true }
   );
   const csrBase64 = (await execAndCapture(`base64 -i "${csrDerPath}"`)).replace(/\n/g, "");
 
-  // Check existing certificate count & create
   let certResponse: any;
   try {
     certResponse = await ascApi(jwt, "/certificates", "POST", {
@@ -132,13 +163,11 @@ export async function createCertificateWithP12(
         jwt,
         "/certificates?filter[certificateType]=DISTRIBUTION"
       );
-      const certs = existing?.data ?? [];
-      if (certs.length > 0) {
-        const oldest = certs[certs.length - 1];
+      const allCerts = existing?.data ?? [];
+      if (allCerts.length > 0) {
+        const oldest = allCerts[allCerts.length - 1];
         console.log(`  🗑️  Deleting: ${oldest.id}`);
-        await ascApi(jwt, `/certificates/${oldest.id}`, "DELETE").catch(
-          () => {}
-        );
+        await ascApi(jwt, `/certificates/${oldest.id}`, "DELETE").catch(() => {});
         certResponse = await ascApi(jwt, "/certificates", "POST", {
           data: {
             type: "certificates",
@@ -159,30 +188,63 @@ export async function createCertificateWithP12(
   const certId = certResponse.data.id as string;
   const certContent = certResponse.data.attributes.certificateContent as string;
 
-  // Write DER cert & convert to PEM
-  const fs = require("fs");
-  fs.writeFileSync(certDerPath, Buffer.from(certContent, "base64"));
+  const p12 = await buildP12FromCert(certContent, certPrivateKeyPath, tmpDir, password);
+  console.log(`  ✅ New certificate created (ID: ${certId})`);
+
+  return { certificateId: certId, p12Base64: p12, password };
+}
+
+async function buildP12FromCert(
+  certContentBase64: string,
+  privateKeyPath: string,
+  tmpDir: string,
+  password: string
+): Promise<string> {
+  const certDerPath = `${tmpDir}/cert.der`;
+  const certPemPath = `${tmpDir}/cert.pem`;
+  const p12Path = `${tmpDir}/cert.p12`;
+
+  fs.writeFileSync(certDerPath, Buffer.from(certContentBase64, "base64"));
   await exec(
     `openssl x509 -inform DER -in "${certDerPath}" -out "${certPemPath}"`,
     { silent: true }
   );
 
+  // Verify the key matches the certificate
+  const certModulus = await execAndCapture(
+    `openssl x509 -noout -modulus -in "${certPemPath}"`,
+  );
+  const keyModulus = await execAndCapture(
+    `openssl rsa -noout -modulus -in "${privateKeyPath}"`,
+  );
+  if (certModulus.trim() !== keyModulus.trim()) {
+    // Cleanup temp files
+    fs.rmSync(certDerPath, { force: true });
+    fs.rmSync(certPemPath, { force: true });
+    throw new Error("Certificate does not match the provided private key");
+  }
+
   // Create .p12 (try without -legacy first for LibreSSL, then with -legacy for OpenSSL 3.x)
   try {
     await exec(
-      `openssl pkcs12 -export -out "${p12Path}" -inkey "${keyPath}" -in "${certPemPath}" -password "pass:${password}" -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`,
+      `openssl pkcs12 -export -out "${p12Path}" -inkey "${privateKeyPath}" -in "${certPemPath}" -password "pass:${password}" -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`,
       { silent: true }
     );
   } catch {
     await exec(
-      `openssl pkcs12 -export -out "${p12Path}" -inkey "${keyPath}" -in "${certPemPath}" -password "pass:${password}" -legacy -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`,
+      `openssl pkcs12 -export -out "${p12Path}" -inkey "${privateKeyPath}" -in "${certPemPath}" -password "pass:${password}" -legacy -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg SHA1`,
       { silent: true }
     );
   }
 
   const p12Base64 = (await execAndCapture(`base64 -i "${p12Path}"`)).replace(/\n/g, "");
 
-  return { certificateId: certId, p12Base64, password };
+  // Cleanup
+  fs.rmSync(certDerPath, { force: true });
+  fs.rmSync(certPemPath, { force: true });
+  fs.rmSync(p12Path, { force: true });
+
+  return p12Base64;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -201,7 +263,6 @@ export async function createProvisioningProfile(
   certificateId: string,
   bundleIdentifier: string
 ): Promise<ProfileResult> {
-  // Get Bundle ID resource
   const bundleIdResponse = await ascApi(
     jwt,
     `/bundleIds?filter[identifier]=${bundleIdentifier}`
@@ -214,7 +275,6 @@ export async function createProvisioningProfile(
   }
   const bundleIdResourceId = bundleIds[0].id as string;
 
-  // Delete stale OpenCI profiles
   const allProfiles = await ascApi(jwt, "/profiles?limit=200");
   const profiles = allProfiles?.data ?? [];
   for (const profile of profiles) {
@@ -225,7 +285,6 @@ export async function createProvisioningProfile(
     }
   }
 
-  // Create new profile
   const timestamp = new Date()
     .toISOString()
     .replace(/[:.]/g, "-")

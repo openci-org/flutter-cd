@@ -21,6 +21,10 @@ inputs:
     description: "Deploy to a Firebase Hosting preview channel (web)"
     required: false
     default: "false"
+  certificate-private-key:
+    description: "RSA private key PEM for iOS code signing. Used to create or reuse distribution certificates. (ios)"
+    required: false
+    default: ""
   asc-key-id:
     description: "App Store Connect API Key ID (ios)"
     required: false
@@ -49,18 +53,6 @@ inputs:
     description: "Upload the IPA to TestFlight after export (ios)"
     required: false
     default: "true"
-  distribution-certificate-p12:
-    description: "Base64-encoded .p12 certificate for reuse (ios)"
-    required: false
-    default: ""
-  distribution-certificate-id:
-    description: "ASC certificate ID for reuse (ios)"
-    required: false
-    default: ""
-  distribution-certificate-password:
-    description: "P12 password (ios)"
-    required: false
-    default: "openci"
 
 runs:
   using: node20
