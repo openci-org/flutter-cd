@@ -26073,7 +26073,7 @@ const KEYCHAIN_PASSWORD = "openci_temp_password";
 async function buildAndSignIos() {
     const workingDirectory = core.getInput("working-directory") || ".";
     const buildArgs = core.getInput("build-args") || "";
-    const bundleId = core.getInput("bundle-id", { required: true });
+    const bundleId = core.getInput("bundle-id") || detectBundleId(workingDirectory);
     const appleTeamId = core.getInput("apple-team-id", { required: true });
     const scheme = core.getInput("scheme") || "Runner";
     const uploadToTestflight = core.getInput("upload-to-testflight") !== "false";
@@ -26286,6 +26286,30 @@ function generateExportOptions(outputPath, teamId, bundleId, profileUuid, upload
 </dict>
 </plist>`;
     fs.writeFileSync(outputPath, plist);
+}
+// ══════════════════════════════════════════════════════════════
+// Bundle ID detection
+// ══════════════════════════════════════════════════════════════
+function detectBundleId(workingDirectory) {
+    const pbxprojPath = path.join(workingDirectory, "ios/Runner.xcodeproj/project.pbxproj");
+    if (!fs.existsSync(pbxprojPath)) {
+        throw new Error("bundle-id not provided and could not auto-detect: project.pbxproj not found");
+    }
+    const content = fs.readFileSync(pbxprojPath, "utf-8");
+    const matches = content.match(/PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);/g);
+    if (!matches || matches.length === 0) {
+        throw new Error("bundle-id not provided and could not auto-detect: PRODUCT_BUNDLE_IDENTIFIER not found in project.pbxproj");
+    }
+    const bundleIds = matches
+        .map((m) => m.replace("PRODUCT_BUNDLE_IDENTIFIER = ", "").replace(";", "").trim())
+        .filter((id) => !id.includes("$(") && !id.includes("Tests"));
+    const uniqueIds = [...new Set(bundleIds)];
+    if (uniqueIds.length === 0) {
+        throw new Error("bundle-id not provided and could not auto-detect: no valid PRODUCT_BUNDLE_IDENTIFIER found");
+    }
+    const detected = uniqueIds[0];
+    console.log(`  📦 Auto-detected bundle ID: ${detected}`);
+    return detected;
 }
 
 
