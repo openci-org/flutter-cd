@@ -25732,8 +25732,17 @@ async function ascApi(jwt, endpoint, method = "GET", body) {
 // ══════════════════════════════════════════════════════════════
 // Preflight check - version & build number
 // ══════════════════════════════════════════════════════════════
+const BLOCKED_STATES = new Set([
+    "READY_FOR_SALE",
+    "PENDING_DEVELOPER_RELEASE",
+    "PROCESSING_FOR_APP_STORE",
+]);
+const REVIEW_STATES = new Set([
+    "IN_REVIEW",
+    "WAITING_FOR_REVIEW",
+]);
 async function preflightCheck(jwt, bundleId, version, buildNumber) {
-    console.log(`  Checking version ${version} (${buildNumber}) for ${bundleId}...`);
+    console.log(`  Checking version ${version}+${buildNumber} for ${bundleId}...`);
     const appsResponse = await ascApi(jwt, `/apps?filter[bundleId]=${bundleId}`);
     const apps = appsResponse?.data ?? [];
     if (apps.length === 0) {
@@ -25741,6 +25750,18 @@ async function preflightCheck(jwt, bundleId, version, buildNumber) {
     }
     const appId = apps[0].id;
     console.log(`  ✅ App found in ASC (ID: ${appId})`);
+    const versionsResponse = await ascApi(jwt, `/apps/${appId}/appStoreVersions?filter[versionString]=${version}&limit=1`);
+    const versions = versionsResponse?.data ?? [];
+    if (versions.length > 0) {
+        const state = versions[0].attributes?.appStoreState;
+        console.log(`  Version ${version} state: ${state}`);
+        if (BLOCKED_STATES.has(state)) {
+            throw new Error(`Version ${version} is already released or pending release (state: ${state}). Increment the version in pubspec.yaml.`);
+        }
+        if (REVIEW_STATES.has(state)) {
+            throw new Error(`Version ${version} is currently in review (state: ${state}). Wait for the review to complete or cancel it.`);
+        }
+    }
     const buildsResponse = await ascApi(jwt, `/builds?filter[app]=${appId}&filter[version]=${buildNumber}&filter[preReleaseVersion.version]=${version}&limit=1`);
     const builds = buildsResponse?.data ?? [];
     if (builds.length > 0) {

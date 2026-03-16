@@ -69,13 +69,24 @@ export async function ascApi(
 // Preflight check - version & build number
 // ══════════════════════════════════════════════════════════════
 
+const BLOCKED_STATES = new Set([
+  "READY_FOR_SALE",
+  "PENDING_DEVELOPER_RELEASE",
+  "PROCESSING_FOR_APP_STORE",
+]);
+
+const REVIEW_STATES = new Set([
+  "IN_REVIEW",
+  "WAITING_FOR_REVIEW",
+]);
+
 export async function preflightCheck(
   jwt: string,
   bundleId: string,
   version: string,
   buildNumber: string
 ): Promise<void> {
-  console.log(`  Checking version ${version} (${buildNumber}) for ${bundleId}...`);
+  console.log(`  Checking version ${version}+${buildNumber} for ${bundleId}...`);
 
   const appsResponse = await ascApi(jwt, `/apps?filter[bundleId]=${bundleId}`);
   const apps = appsResponse?.data ?? [];
@@ -87,6 +98,29 @@ export async function preflightCheck(
   const appId = apps[0].id as string;
   console.log(`  ✅ App found in ASC (ID: ${appId})`);
 
+  const versionsResponse = await ascApi(
+    jwt,
+    `/apps/${appId}/appStoreVersions?filter[versionString]=${version}&limit=1`
+  );
+  const versions = versionsResponse?.data ?? [];
+
+  if (versions.length > 0) {
+    const state = versions[0].attributes?.appStoreState as string;
+    console.log(`  Version ${version} state: ${state}`);
+
+    if (BLOCKED_STATES.has(state)) {
+      throw new Error(
+        `Version ${version} is already released or pending release (state: ${state}). Increment the version in pubspec.yaml.`
+      );
+    }
+
+    if (REVIEW_STATES.has(state)) {
+      throw new Error(
+        `Version ${version} is currently in review (state: ${state}). Wait for the review to complete or cancel it.`
+      );
+    }
+  }
+
   const buildsResponse = await ascApi(
     jwt,
     `/builds?filter[app]=${appId}&filter[version]=${buildNumber}&filter[preReleaseVersion.version]=${version}&limit=1`
@@ -97,6 +131,7 @@ export async function preflightCheck(
       `Build ${version}+${buildNumber} already exists in App Store Connect. Increment the build number in pubspec.yaml.`
     );
   }
+
   console.log(`  ✅ Version ${version}+${buildNumber} is available for upload`);
 }
 
