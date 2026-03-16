@@ -25687,6 +25687,7 @@ exports.ascApi = ascApi;
 exports.preflightCheck = preflightCheck;
 exports.getOrCreateCertificate = getOrCreateCertificate;
 exports.createProvisioningProfile = createProvisioningProfile;
+const crypto = __importStar(__nccwpck_require__(6982));
 const fs = __importStar(__nccwpck_require__(9896));
 const https = __importStar(__nccwpck_require__(5692));
 const helpers_1 = __nccwpck_require__(1302);
@@ -25694,8 +25695,9 @@ const ASC_API_BASE = "https://api.appstoreconnect.apple.com/v1";
 // ══════════════════════════════════════════════════════════════
 // ASC JWT
 // ══════════════════════════════════════════════════════════════
-async function generateAscJwt(keyId, issuerId, privateKeyPath) {
-    const b64url = (s) => Buffer.from(s).toString("base64url");
+function generateAscJwt(keyId, issuerId, privateKeyPath) {
+    const b64url = (data) => (typeof data === "string" ? Buffer.from(data) : data)
+        .toString("base64url");
     const header = b64url(JSON.stringify({ alg: "ES256", kid: keyId, typ: "JWT" }));
     const now = Math.floor(Date.now() / 1000);
     const payload = b64url(JSON.stringify({
@@ -25705,8 +25707,10 @@ async function generateAscJwt(keyId, issuerId, privateKeyPath) {
         aud: "appstoreconnect-v1",
     }));
     const signInput = `${header}.${payload}`;
-    const signature = await (0, helpers_1.execAndCapture)(`printf '%s' '${signInput}' | openssl dgst -sha256 -sign "${privateKeyPath}" -binary | openssl base64 -e -A | tr '+/' '-_' | tr -d '='`);
-    return `${signInput}.${signature.trim()}`;
+    const privateKey = fs.readFileSync(privateKeyPath, "utf8");
+    const derSignature = crypto.sign("SHA256", Buffer.from(signInput), { key: privateKey, dsaEncoding: "ieee-p1363" });
+    const signature = derSignature.toString("base64url");
+    return `${signInput}.${signature}`;
 }
 // ══════════════════════════════════════════════════════════════
 // ASC API

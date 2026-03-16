@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as https from "https";
 import { exec, execAndCapture } from "./helpers";
@@ -8,13 +9,15 @@ const ASC_API_BASE = "https://api.appstoreconnect.apple.com/v1";
 // ASC JWT
 // ══════════════════════════════════════════════════════════════
 
-export async function generateAscJwt(
+
+export function generateAscJwt(
   keyId: string,
   issuerId: string,
   privateKeyPath: string
-): Promise<string> {
-  const b64url = (s: string) =>
-    Buffer.from(s).toString("base64url");
+): string {
+  const b64url = (data: Buffer | string) =>
+    (typeof data === "string" ? Buffer.from(data) : data)
+      .toString("base64url");
 
   const header = b64url(JSON.stringify({ alg: "ES256", kid: keyId, typ: "JWT" }));
   const now = Math.floor(Date.now() / 1000);
@@ -28,11 +31,15 @@ export async function generateAscJwt(
   );
 
   const signInput = `${header}.${payload}`;
-  const signature = await execAndCapture(
-    `printf '%s' '${signInput}' | openssl dgst -sha256 -sign "${privateKeyPath}" -binary | openssl base64 -e -A | tr '+/' '-_' | tr -d '='`
+  const privateKey = fs.readFileSync(privateKeyPath, "utf8");
+  const derSignature = crypto.sign(
+    "SHA256",
+    Buffer.from(signInput),
+    { key: privateKey, dsaEncoding: "ieee-p1363" }
   );
+  const signature = derSignature.toString("base64url");
 
-  return `${signInput}.${signature.trim()}`;
+  return `${signInput}.${signature}`;
 }
 
 // ══════════════════════════════════════════════════════════════
