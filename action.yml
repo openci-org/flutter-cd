@@ -37,10 +37,6 @@ inputs:
     description: "App Store Connect API Private Key, .p8 PEM content (ios)"
     required: false
     default: ""
-  bundle-id:
-    description: "iOS Bundle Identifier (ios)"
-    required: false
-    default: ""
   apple-team-id:
     description: "Apple Developer Team ID (ios)"
     required: false

@@ -16,7 +16,7 @@ const KEYCHAIN_PASSWORD = "openci_temp_password";
 export async function buildAndSignIos(): Promise<void> {
   const workingDirectory = core.getInput("working-directory") || ".";
   const buildArgs = core.getInput("build-args") || "";
-  const bundleId = core.getInput("bundle-id") || detectBundleId(workingDirectory);
+  const bundleId = detectBundleId(workingDirectory);
   const appleTeamId = core.getInput("apple-team-id", { required: true });
   const scheme = core.getInput("scheme") || "Runner";
   const uploadToTestflight = core.getInput("upload-to-testflight") !== "false";
