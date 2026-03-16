@@ -37,10 +37,6 @@ inputs:
     description: "App Store Connect API Private Key, .p8 PEM content (ios)"
     required: false
     default: ""
-  apple-team-id:
-    description: "Apple Developer Team ID (ios)"
-    required: false
-    default: ""
   scheme:
     description: "Xcode scheme name (ios)"
     required: false

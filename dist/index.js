@@ -26074,8 +26074,7 @@ const KEYCHAIN_PASSWORD = "openci_temp_password";
 async function buildAndSignIos() {
     const workingDirectory = core.getInput("working-directory") || ".";
     const buildArgs = core.getInput("build-args") || "";
-    const bundleId = detectBundleId(workingDirectory);
-    const appleTeamId = core.getInput("apple-team-id", { required: true });
+    const { bundleId, teamId: appleTeamId } = parsePbxproj(workingDirectory);
     const scheme = core.getInput("scheme") || "Runner";
     const certPrivateKey = core.getInput("certificate-private-key", { required: true });
     const ascKeyId = core.getInput("asc-key-id", { required: true });
@@ -26288,28 +26287,32 @@ function generateExportOptions(outputPath, teamId, bundleId, profileUuid) {
     fs.writeFileSync(outputPath, plist);
 }
 // ══════════════════════════════════════════════════════════════
-// Bundle ID detection
+// Xcode project parsing
 // ══════════════════════════════════════════════════════════════
-function detectBundleId(workingDirectory) {
+function parsePbxproj(workingDirectory) {
     const pbxprojPath = path.join(workingDirectory, "ios/Runner.xcodeproj/project.pbxproj");
     if (!fs.existsSync(pbxprojPath)) {
-        throw new Error("bundle-id not provided and could not auto-detect: project.pbxproj not found");
+        throw new Error("project.pbxproj not found. Is this a Flutter iOS project?");
     }
     const content = fs.readFileSync(pbxprojPath, "utf-8");
-    const matches = content.match(/PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);/g);
-    if (!matches || matches.length === 0) {
-        throw new Error("bundle-id not provided and could not auto-detect: PRODUCT_BUNDLE_IDENTIFIER not found in project.pbxproj");
+    const bundleMatches = content.match(/PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);/g);
+    if (!bundleMatches || bundleMatches.length === 0) {
+        throw new Error("PRODUCT_BUNDLE_IDENTIFIER not found in project.pbxproj");
     }
-    const bundleIds = matches
-        .map((m) => m.replace("PRODUCT_BUNDLE_IDENTIFIER = ", "").replace(";", "").trim())
-        .filter((id) => !id.includes("$(") && !id.includes("Tests"));
-    const uniqueIds = [...new Set(bundleIds)];
-    if (uniqueIds.length === 0) {
-        throw new Error("bundle-id not provided and could not auto-detect: no valid PRODUCT_BUNDLE_IDENTIFIER found");
+    const bundleIds = [...new Set(bundleMatches
+            .map((m) => m.replace("PRODUCT_BUNDLE_IDENTIFIER = ", "").replace(";", "").trim())
+            .filter((id) => !id.includes("$(") && !id.includes("Tests")))];
+    if (bundleIds.length === 0) {
+        throw new Error("No valid PRODUCT_BUNDLE_IDENTIFIER found in project.pbxproj");
     }
-    const detected = uniqueIds[0];
-    console.log(`  📦 Auto-detected bundle ID: ${detected}`);
-    return detected;
+    const teamMatches = content.match(/DEVELOPMENT_TEAM = ([A-Z0-9]+);/g);
+    if (!teamMatches || teamMatches.length === 0) {
+        throw new Error("DEVELOPMENT_TEAM not found in project.pbxproj. Open the project in Xcode and set your team first.");
+    }
+    const teamIds = [...new Set(teamMatches.map((m) => m.replace("DEVELOPMENT_TEAM = ", "").replace(";", "").trim()))];
+    console.log(`  📦 Auto-detected bundle ID: ${bundleIds[0]}`);
+    console.log(`  👥 Auto-detected team ID: ${teamIds[0]}`);
+    return { bundleId: bundleIds[0], teamId: teamIds[0] };
 }
 
 
