@@ -105,13 +105,13 @@ export async function buildAndSignIos(): Promise<void> {
     // ── Step 11: Build archive ──────────────────────────────
     core.startGroup("Step 11: Building archive");
     console.log("  ⏳ This may take several minutes...");
-    const archivePath = path.join(workingDirectory, "build", `${scheme}.xcarchive`);
+    const archiveRelPath = path.join("build", `${scheme}.xcarchive`);
     await exec(
       [
         "xcodebuild archive -quiet",
         `-workspace "ios/Runner.xcworkspace"`,
         `-scheme "${scheme}"`,
-        `-archivePath "${archivePath}"`,
+        `-archivePath "${archiveRelPath}"`,
         '-destination "generic/platform=iOS"',
       ].join(" "),
       { cwd: workingDirectory }
@@ -126,13 +126,12 @@ export async function buildAndSignIos(): Promise<void> {
     const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
     fs.copyFileSync(ascKeyPath, apiKeyDest);
 
-    const exportPath = path.join(workingDirectory, "build");
     await exec(
       [
         "xcodebuild -exportArchive -quiet",
-        `-archivePath "${archivePath}"`,
-        `-exportPath "${exportPath}"`,
-        `-exportOptionsPlist "${exportOptionsPath}"`,
+        `-archivePath "${archiveRelPath}"`,
+        `-exportPath "build"`,
+        `-exportOptionsPlist "ExportOptions.plist"`,
         "-allowProvisioningUpdates",
         `-authenticationKeyPath "${apiKeyDest}"`,
         `-authenticationKeyID "${ascKeyId}"`,
@@ -152,7 +151,7 @@ export async function buildAndSignIos(): Promise<void> {
 
     console.log("");
     console.log("🎉 iOS Sign & Build complete!");
-    console.log(`   IPA: ${exportPath}/${scheme}.ipa`);
+    console.log(`   IPA: ${path.join(workingDirectory, "build", `${scheme}.ipa`)}`);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

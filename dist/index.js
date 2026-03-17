@@ -26222,12 +26222,12 @@ async function buildAndSignIos() {
         // ── Step 11: Build archive ──────────────────────────────
         core.startGroup("Step 11: Building archive");
         console.log("  ⏳ This may take several minutes...");
-        const archivePath = path.join(workingDirectory, "build", `${scheme}.xcarchive`);
+        const archiveRelPath = path.join("build", `${scheme}.xcarchive`);
         await (0, helpers_1.exec)([
             "xcodebuild archive -quiet",
             `-workspace "ios/Runner.xcworkspace"`,
             `-scheme "${scheme}"`,
-            `-archivePath "${archivePath}"`,
+            `-archivePath "${archiveRelPath}"`,
             '-destination "generic/platform=iOS"',
         ].join(" "), { cwd: workingDirectory });
         console.log("  ✅ Archive created");
@@ -26238,12 +26238,11 @@ async function buildAndSignIos() {
         fs.mkdirSync(privateKeysDir, { recursive: true });
         const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
         fs.copyFileSync(ascKeyPath, apiKeyDest);
-        const exportPath = path.join(workingDirectory, "build");
         await (0, helpers_1.exec)([
             "xcodebuild -exportArchive -quiet",
-            `-archivePath "${archivePath}"`,
-            `-exportPath "${exportPath}"`,
-            `-exportOptionsPlist "${exportOptionsPath}"`,
+            `-archivePath "${archiveRelPath}"`,
+            `-exportPath "build"`,
+            `-exportOptionsPlist "ExportOptions.plist"`,
             "-allowProvisioningUpdates",
             `-authenticationKeyPath "${apiKeyDest}"`,
             `-authenticationKeyID "${ascKeyId}"`,
@@ -26259,7 +26258,7 @@ async function buildAndSignIos() {
         core.endGroup();
         console.log("");
         console.log("🎉 iOS Sign & Build complete!");
-        console.log(`   IPA: ${exportPath}/${scheme}.ipa`);
+        console.log(`   IPA: ${path.join(workingDirectory, "build", `${scheme}.ipa`)}`);
     }
     finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
