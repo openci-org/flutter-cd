@@ -113,11 +113,6 @@ export async function buildAndSignIos(): Promise<void> {
         `-scheme "${scheme}"`,
         `-archivePath "${archivePath}"`,
         '-destination "generic/platform=iOS"',
-        `DEVELOPMENT_TEAM="${appleTeamId}"`,
-        "CODE_SIGN_STYLE=Manual",
-        'CODE_SIGN_IDENTITY="Apple Distribution"',
-        `PROVISIONING_PROFILE_SPECIFIER="${profile.name}"`,
-        `PROVISIONING_PROFILE="${profile.uuid}"`,
       ].join(" "),
       { cwd: workingDirectory }
     );
