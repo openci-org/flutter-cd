@@ -41,6 +41,10 @@ inputs:
     description: "Xcode scheme name (ios)"
     required: false
     default: "Runner"
+  build-number:
+    description: "Override the build number from pubspec.yaml. Useful for auto-incrementing with CI run numbers (e.g. OPENCI_RUN_NUMBER)."
+    required: false
+    default: ""
 
 runs:
   using: node20

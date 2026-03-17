@@ -26153,6 +26153,7 @@ async function buildAndSignIos() {
     const ascKeyId = core.getInput("asc-key-id", { required: true });
     const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
     const ascPrivateKey = core.getInput("asc-private-key", { required: true }).replace(/\\n/g, "\n");
+    const buildNumberInput = core.getInput("build-number") || "";
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-ios-"));
     try {
         console.log("🚀 OpenCI iOS Sign & Build");
@@ -26169,13 +26170,16 @@ async function buildAndSignIos() {
         core.endGroup();
         // ── Step 2: Preflight check ─────────────────────────────
         core.startGroup("Step 2: Preflight version check");
-        const { version, buildNumber } = parseVersion(workingDirectory);
+        const parsed = parseVersion(workingDirectory);
+        const version = parsed.version;
+        const buildNumber = buildNumberInput || parsed.buildNumber;
         console.log(`   Version: ${version}+${buildNumber}`);
         await (0, asc_1.preflightCheck)(jwt, bundleId, version, buildNumber);
         core.endGroup();
         // ── Step 3: Flutter build ───────────────────────────────
         core.startGroup("Step 3: Flutter build ios (no codesign)");
-        await (0, helpers_1.exec)(`flutter build ios --no-codesign ${buildArgs}`.trim(), {
+        const buildNumberArg = buildNumberInput ? `--build-number=${buildNumber}` : "";
+        await (0, helpers_1.exec)(`flutter build ios --no-codesign ${buildNumberArg} ${buildArgs}`.trim(), {
             cwd: workingDirectory,
         });
         core.endGroup();
