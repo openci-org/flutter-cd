@@ -26176,83 +26176,56 @@ async function buildAndSignIos() {
         console.log(`   Version: ${version}+${buildNumber}`);
         await (0, asc_1.preflightCheck)(jwt, bundleId, version, buildNumber);
         core.endGroup();
-        // ── Step 3: Flutter build ───────────────────────────────
-        core.startGroup("Step 3: Flutter build ios (no codesign)");
-        const buildNumberArg = buildNumberInput ? `--build-number=${buildNumber}` : "";
-        await (0, helpers_1.exec)(`flutter build ios --no-codesign ${buildNumberArg} ${buildArgs}`.trim(), {
-            cwd: workingDirectory,
-        });
-        core.endGroup();
-        // ── Step 4: Get or create distribution certificate ──────
-        core.startGroup("Step 4: Setting up distribution certificate");
+        // ── Step 3: Get or create distribution certificate ──────
+        core.startGroup("Step 3: Setting up distribution certificate");
         const certKeyPath = path.join(tmpDir, "cert_key.pem");
         fs.writeFileSync(certKeyPath, certPrivateKey);
         const cert = await (0, asc_1.getOrCreateCertificate)(jwt, certKeyPath, tmpDir);
         console.log(`  Certificate ID: ${cert.certificateId}`);
         core.endGroup();
-        // ── Step 5: Create provisioning profile ─────────────────
-        core.startGroup("Step 5: Creating provisioning profile");
+        // ── Step 4: Create provisioning profile ─────────────────
+        core.startGroup("Step 4: Creating provisioning profile");
         const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, "IOS_APP_STORE");
         console.log(`  ✅ Profile created`);
         console.log(`     Name: ${profile.name}`);
         console.log(`     UUID: ${profile.uuid}`);
         core.endGroup();
-        // ── Step 6: Setup keychain ──────────────────────────────
-        core.startGroup("Step 6: Setting up temporary keychain");
+        // ── Step 5: Setup keychain ──────────────────────────────
+        core.startGroup("Step 5: Setting up temporary keychain");
         await setupKeychain();
         console.log("  ✅ Keychain created");
         core.endGroup();
-        // ── Step 7: Import certificate ──────────────────────────
-        core.startGroup("Step 7: Importing certificate");
+        // ── Step 6: Import certificate ──────────────────────────
+        core.startGroup("Step 6: Importing certificate");
         await importCertificate(cert.p12Base64, cert.password, tmpDir);
         console.log("  ✅ Certificate imported");
         core.endGroup();
-        // ── Step 8: Install provisioning profile ────────────────
-        core.startGroup("Step 8: Installing provisioning profile");
+        // ── Step 7: Install provisioning profile ────────────────
+        core.startGroup("Step 7: Installing provisioning profile");
         await installProvisioningProfile(profile, bundleId);
         console.log(`  ✅ Profile installed (UUID: ${profile.uuid})`);
         core.endGroup();
-        // ── Step 9: Edit xcodeproj ──────────────────────────────
-        core.startGroup("Step 9: Configuring Xcode project for manual signing");
+        // ── Step 8: Edit xcodeproj ──────────────────────────────
+        core.startGroup("Step 8: Configuring Xcode project for manual signing");
         editXcodeProject(workingDirectory, bundleId, appleTeamId, profile);
         console.log("  ✅ Xcode project updated for manual signing");
         core.endGroup();
-        // ── Step 10: Generate ExportOptions.plist ────────────────
-        core.startGroup("Step 10: Generating ExportOptions.plist");
+        // ── Step 9: Generate ExportOptions.plist ────────────────
+        core.startGroup("Step 9: Generating ExportOptions.plist");
         const exportOptionsPath = path.join(workingDirectory, "ExportOptions.plist");
         generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid);
         console.log("  ✅ ExportOptions.plist generated");
         core.endGroup();
-        // ── Step 11: Build archive ──────────────────────────────
-        core.startGroup("Step 11: Building archive");
+        // ── Step 10: Flutter build IPA ──────────────────────────
+        core.startGroup("Step 10: Building IPA");
         console.log("  ⏳ This may take several minutes...");
-        const archiveRelPath = path.join("build", `${scheme}.xcarchive`);
-        await (0, helpers_1.exec)([
-            "xcodebuild archive -quiet",
-            `-workspace "ios/Runner.xcworkspace"`,
-            `-scheme "${scheme}"`,
-            `-archivePath "${archiveRelPath}"`,
-            '-destination "generic/platform=iOS"',
-        ].join(" "), { cwd: workingDirectory });
-        console.log("  ✅ Archive created");
-        core.endGroup();
-        // ── Step 12: Export IPA ──────────────────────────────────
-        core.startGroup("Step 12: Exporting IPA");
+        const buildNumberArg = buildNumberInput ? `--build-number=${buildNumber}` : "";
         const privateKeysDir = path.join(os.homedir(), "private_keys");
         fs.mkdirSync(privateKeysDir, { recursive: true });
         const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
         fs.copyFileSync(ascKeyPath, apiKeyDest);
-        await (0, helpers_1.exec)([
-            "xcodebuild -exportArchive -quiet",
-            `-archivePath "${archiveRelPath}"`,
-            `-exportPath "build"`,
-            `-exportOptionsPlist "ExportOptions.plist"`,
-            "-allowProvisioningUpdates",
-            `-authenticationKeyPath "${apiKeyDest}"`,
-            `-authenticationKeyID "${ascKeyId}"`,
-            `-authenticationKeyIssuerID "${ascIssuerId}"`,
-        ].join(" "), { cwd: workingDirectory });
-        console.log("  ✅ IPA exported");
+        await (0, helpers_1.exec)(`flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
+        console.log("  ✅ IPA built and exported");
         core.endGroup();
         // ── Cleanup ─────────────────────────────────────────────
         core.startGroup("Cleanup");
@@ -26262,7 +26235,7 @@ async function buildAndSignIos() {
         core.endGroup();
         console.log("");
         console.log("🎉 iOS Sign & Build complete!");
-        console.log(`   IPA: ${path.join(workingDirectory, "build", `${scheme}.ipa`)}`);
+        console.log(`   IPA: ${path.join(workingDirectory, "build", "ios", "ipa")}`);
     }
     finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
