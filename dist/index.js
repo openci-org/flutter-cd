@@ -26212,7 +26212,7 @@ async function buildAndSignIos() {
         core.endGroup();
         // ── Step 9: Generate ExportOptions.plist ────────────────
         core.startGroup("Step 9: Generating ExportOptions.plist");
-        const exportOptionsPath = path.join(workingDirectory, "ExportOptions.plist");
+        const exportOptionsPath = path.resolve(workingDirectory, "ExportOptions.plist");
         generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid);
         console.log("  ✅ ExportOptions.plist generated");
         core.endGroup();
