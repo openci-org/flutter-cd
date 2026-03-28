@@ -94,7 +94,7 @@ export async function buildAndSignIos(): Promise<void> {
     // ── Step 9: Generate ExportOptions.plist ────────────────
     core.startGroup("Step 9: Generating ExportOptions.plist");
     const exportOptionsPath = path.resolve(workingDirectory, "ExportOptions.plist");
-    generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.uuid);
+    generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.name);
     console.log("  ✅ ExportOptions.plist generated");
     core.endGroup();
 
@@ -107,48 +107,16 @@ export async function buildAndSignIos(): Promise<void> {
     const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
     fs.copyFileSync(ascKeyPath, apiKeyDest);
 
-    // Step 10a: Archive only (flutter build ipa may fail on export, that's OK)
-    const archivePath = path.join(workingDirectory, "build", "ios", "archive", "Runner.xcarchive");
-    try {
-      await exec(
-        `flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
-        { cwd: workingDirectory }
-      );
-    } catch (_e) {
-      // flutter build ipa may fail during export step, check if archive exists
-      if (!fs.existsSync(archivePath)) {
-        throw new Error("Xcode archive was not created. The build step failed.");
-      }
-      console.log("  ⚠️  flutter build ipa export failed, falling back to manual xcodebuild export");
-    }
+    await exec(
+      `flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
+      { cwd: workingDirectory }
+    );
 
-    // Step 10b: If IPA wasn't created, export manually with API key auth
+    // Verify IPA was actually created
     const ipaDir = path.join(workingDirectory, "build", "ios", "ipa");
-    const ipaExists = fs.existsSync(ipaDir) && fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length > 0;
-
-    if (!ipaExists) {
-      console.log("  🔄 Exporting archive with xcodebuild + API key auth...");
-      fs.mkdirSync(ipaDir, { recursive: true });
-      await exec(
-        [
-          `xcodebuild -exportArchive`,
-          `-archivePath "${archivePath}"`,
-          `-exportOptionsPlist "${exportOptionsPath}"`,
-          `-exportPath "${ipaDir}"`,
-          `-allowProvisioningUpdates`,
-          `-authenticationKeyPath "${apiKeyDest}"`,
-          `-authenticationKeyID "${ascKeyId}"`,
-          `-authenticationKeyIssuerID "${ascIssuerId}"`,
-        ].join(" "),
-        { cwd: workingDirectory }
-      );
-
-      // Verify IPA was created after manual export
-      if (fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length === 0) {
-        throw new Error("IPA file was not created even after manual xcodebuild export.");
-      }
+    if (!fs.existsSync(ipaDir) || fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length === 0) {
+      throw new Error("IPA file was not created. The export step may have failed.");
     }
-
     console.log("  ✅ IPA built and exported");
     core.endGroup();
 
@@ -290,7 +258,7 @@ function generateExportOptions(
   outputPath: string,
   teamId: string,
   bundleId: string,
-  profileUuid: string,
+  profileName: string,
 ): void {
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -305,12 +273,10 @@ function generateExportOptions(
     <key>provisioningProfiles</key>
     <dict>
         <key>${bundleId}</key>
-        <string>${profileUuid}</string>
+        <string>${profileName}</string>
     </dict>
     <key>signingCertificate</key>
     <string>Apple Distribution</string>
-    <key>destination</key>
-    <string>upload</string>
     <key>stripSwiftSymbols</key>
     <true/>
     <key>uploadSymbols</key>
