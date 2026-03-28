@@ -26225,6 +26225,11 @@ async function buildAndSignIos() {
         const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
         fs.copyFileSync(ascKeyPath, apiKeyDest);
         await (0, helpers_1.exec)(`flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
+        // Verify IPA was actually created
+        const ipaDir = path.join(workingDirectory, "build", "ios", "ipa");
+        if (!fs.existsSync(ipaDir) || fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length === 0) {
+            throw new Error("IPA file was not created. The export step may have failed.");
+        }
         console.log("  ✅ IPA built and exported");
         core.endGroup();
         // ── Cleanup ─────────────────────────────────────────────
@@ -26313,7 +26318,7 @@ function generateExportOptions(outputPath, teamId, bundleId, profileUuid) {
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>app-store-connect</string>
+    <string>app-store</string>
     <key>teamID</key>
     <string>${teamId}</string>
     <key>signingStyle</key>
