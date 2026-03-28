@@ -107,16 +107,48 @@ export async function buildAndSignIos(): Promise<void> {
     const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
     fs.copyFileSync(ascKeyPath, apiKeyDest);
 
-    await exec(
-      `flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
-      { cwd: workingDirectory }
-    );
-
-    // Verify IPA was actually created
-    const ipaDir = path.join(workingDirectory, "build", "ios", "ipa");
-    if (!fs.existsSync(ipaDir) || fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length === 0) {
-      throw new Error("IPA file was not created. The export step may have failed.");
+    // Step 10a: Archive only (flutter build ipa may fail on export, that's OK)
+    const archivePath = path.join(workingDirectory, "build", "ios", "archive", "Runner.xcarchive");
+    try {
+      await exec(
+        `flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
+        { cwd: workingDirectory }
+      );
+    } catch (_e) {
+      // flutter build ipa may fail during export step, check if archive exists
+      if (!fs.existsSync(archivePath)) {
+        throw new Error("Xcode archive was not created. The build step failed.");
+      }
+      console.log("  ⚠️  flutter build ipa export failed, falling back to manual xcodebuild export");
     }
+
+    // Step 10b: If IPA wasn't created, export manually with API key auth
+    const ipaDir = path.join(workingDirectory, "build", "ios", "ipa");
+    const ipaExists = fs.existsSync(ipaDir) && fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length > 0;
+
+    if (!ipaExists) {
+      console.log("  🔄 Exporting archive with xcodebuild + API key auth...");
+      fs.mkdirSync(ipaDir, { recursive: true });
+      await exec(
+        [
+          `xcodebuild -exportArchive`,
+          `-archivePath "${archivePath}"`,
+          `-exportOptionsPlist "${exportOptionsPath}"`,
+          `-exportPath "${ipaDir}"`,
+          `-allowProvisioningUpdates`,
+          `-authenticationKeyPath "${apiKeyDest}"`,
+          `-authenticationKeyID "${ascKeyId}"`,
+          `-authenticationKeyIssuerID "${ascIssuerId}"`,
+        ].join(" "),
+        { cwd: workingDirectory }
+      );
+
+      // Verify IPA was created after manual export
+      if (fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length === 0) {
+        throw new Error("IPA file was not created even after manual xcodebuild export.");
+      }
+    }
+
     console.log("  ✅ IPA built and exported");
     core.endGroup();
 
