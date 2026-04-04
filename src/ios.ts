@@ -125,11 +125,10 @@ export async function buildAndSignIos(): Promise<void> {
 
     // ── Step 11: Upload to App Store Connect ─────────────────
     core.startGroup("Step 11: Uploading to App Store Connect");
-    const ipaPath = path.join(ipaDir, ipaFiles[0]);
+    const ipaPath = path.resolve(ipaDir, ipaFiles[0]);
     console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
     await exec(
-      `xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}"`,
-      { cwd: workingDirectory }
+      `xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}"`
     );
     console.log("  ✅ IPA uploaded to App Store Connect");
     core.endGroup();
