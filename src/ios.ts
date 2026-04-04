@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { exec } from "./helpers";
+import { exec, execAndCapture } from "./helpers";
 import {
   generateAscJwt,
   preflightCheck,
@@ -127,9 +127,12 @@ export async function buildAndSignIos(): Promise<void> {
     core.startGroup("Step 11: Uploading to App Store Connect");
     const ipaPath = path.resolve(ipaDir, ipaFiles[0]);
     console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
-    await exec(
-      `xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}"`
+    const uploadOutput = await execAndCapture(
+      `xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}" 2>&1`
     );
+    if (uploadOutput.includes("ERROR")) {
+      throw new Error(`Upload to App Store Connect failed:\n${uploadOutput.trim()}`);
+    }
     console.log("  ✅ IPA uploaded to App Store Connect");
     core.endGroup();
 

@@ -26239,7 +26239,10 @@ async function buildAndSignIos() {
         core.startGroup("Step 11: Uploading to App Store Connect");
         const ipaPath = path.resolve(ipaDir, ipaFiles[0]);
         console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
-        await (0, helpers_1.exec)(`xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}"`);
+        const uploadOutput = await (0, helpers_1.execAndCapture)(`xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}" 2>&1`);
+        if (uploadOutput.includes("ERROR")) {
+            throw new Error(`Upload to App Store Connect failed:\n${uploadOutput.trim()}`);
+        }
         console.log("  ✅ IPA uploaded to App Store Connect");
         core.endGroup();
         // ── Cleanup ─────────────────────────────────────────────
