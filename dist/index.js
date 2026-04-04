@@ -26227,10 +26227,20 @@ async function buildAndSignIos() {
         await (0, helpers_1.exec)(`flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
         // Verify IPA was actually created
         const ipaDir = path.join(workingDirectory, "build", "ios", "ipa");
-        if (!fs.existsSync(ipaDir) || fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa")).length === 0) {
+        const ipaFiles = fs.existsSync(ipaDir)
+            ? fs.readdirSync(ipaDir).filter(f => f.endsWith(".ipa"))
+            : [];
+        if (ipaFiles.length === 0) {
             throw new Error("IPA file was not created. The export step may have failed.");
         }
         console.log("  ✅ IPA built and exported");
+        core.endGroup();
+        // ── Step 11: Upload to App Store Connect ─────────────────
+        core.startGroup("Step 11: Uploading to App Store Connect");
+        const ipaPath = path.join(ipaDir, ipaFiles[0]);
+        console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
+        await (0, helpers_1.exec)(`xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}"`, { cwd: workingDirectory });
+        console.log("  ✅ IPA uploaded to App Store Connect");
         core.endGroup();
         // ── Cleanup ─────────────────────────────────────────────
         core.startGroup("Cleanup");
@@ -26239,7 +26249,7 @@ async function buildAndSignIos() {
         console.log("  ✅ Temporary keychain and API key removed");
         core.endGroup();
         console.log("");
-        console.log("🎉 iOS Sign & Build complete!");
+        console.log("🎉 iOS Sign, Build & Upload complete!");
         console.log(`   IPA: ${path.join(workingDirectory, "build", "ios", "ipa")}`);
     }
     finally {
