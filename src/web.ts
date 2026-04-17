@@ -22,7 +22,11 @@ export async function deployWeb(): Promise<void> {
   // Find firebase.json
   core.startGroup("Deploy to Firebase Hosting");
 
-  const firebaseDir = findFirebaseDir(".");
+  let firebaseDir = findFirebaseDir(workingDirectory);
+  if (!firebaseDir) {
+    firebaseDir = findFirebaseDir(".");
+  }
+
   if (!firebaseDir) {
     throw new Error("firebase.json not found in the repository");
   }
