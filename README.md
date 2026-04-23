@@ -9,7 +9,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 ### Web — Production Deploy
 
 ```yaml
-- uses: open-ci-io/flutter-cd@v1
+- uses: openci-org/flutter-cd@v1
   with:
     platform: "web"
     working-directory: "apps/dashboard"
@@ -19,7 +19,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 ### Web — Preview Deploy (for PRs)
 
 ```yaml
-- uses: open-ci-io/flutter-cd@v1
+- uses: openci-org/flutter-cd@v1
   with:
     platform: "web"
     working-directory: "apps/dashboard"
@@ -30,7 +30,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 ### iOS — Build & Upload to TestFlight
 
 ```yaml
-- uses: open-ci-io/flutter-cd@v1
+- uses: openci-org/flutter-cd@v1
   with:
     platform: "ios"
     working-directory: "apps/dashboard"
@@ -46,7 +46,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 On the first run, a distribution certificate is created automatically. To reuse it on subsequent runs, pass the cached certificate:
 
 ```yaml
-- uses: open-ci-io/flutter-cd@v1
+- uses: openci-org/flutter-cd@v1
   with:
     platform: "ios"
     working-directory: "apps/dashboard"
