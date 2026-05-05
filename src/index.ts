@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import { deployWeb } from "./web";
 import { buildAndSignIos } from "./ios";
+import { buildSignAndNotarizeMacos } from "./macos";
 
 async function run(): Promise<void> {
   try {
@@ -12,6 +13,9 @@ async function run(): Promise<void> {
         break;
       case "ios":
         await buildAndSignIos();
+        break;
+      case "macos":
+        await buildSignAndNotarizeMacos();
         break;
       default:
         throw new Error(`Unsupported platform: ${platform}`);

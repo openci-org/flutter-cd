@@ -181,21 +181,24 @@ interface CertificateResult {
   password: string;
 }
 
+type CertificateType = "DISTRIBUTION" | "DEVELOPER_ID_APPLICATION";
+
 /**
- * Try to find an existing valid DISTRIBUTION certificate.
+ * Try to find an existing valid signing certificate of the requested type.
  * If found, download and create a p12 with the provided private key.
  * If not found, create a new one using CSR from the provided key.
  */
 export async function getOrCreateCertificate(
   jwt: string,
   certPrivateKeyPath: string,
-  tmpDir: string
+  tmpDir: string,
+  certificateType: CertificateType = "DISTRIBUTION"
 ): Promise<CertificateResult> {
   const password = "openci";
 
   const existingCerts = await ascApi(
     jwt,
-    "/certificates?filter[certificateType]=DISTRIBUTION"
+    `/certificates?filter[certificateType]=${certificateType}`
   );
   const certs = existingCerts?.data ?? [];
 
@@ -227,20 +230,21 @@ export async function getOrCreateCertificate(
     console.log("  No valid certificates found, creating new...");
   }
 
-  return createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password);
+  return createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password, certificateType);
 }
 
 async function createNewCertificate(
   jwt: string,
   certPrivateKeyPath: string,
   tmpDir: string,
-  password: string
+  password: string,
+  certificateType: CertificateType
 ): Promise<CertificateResult> {
   const csrPemPath = `${tmpDir}/csr.pem`;
   const csrDerPath = `${tmpDir}/csr.der`;
 
   await exec(
-    `openssl req -new -key "${certPrivateKeyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI Distribution/C=JP/O=OpenCI"`,
+    `openssl req -new -key "${certPrivateKeyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI ${certificateType}/C=JP/O=OpenCI"`,
     { silent: true }
   );
 
@@ -256,7 +260,7 @@ async function createNewCertificate(
       data: {
         type: "certificates",
         attributes: {
-          certificateType: "DISTRIBUTION",
+          certificateType,
           csrContent: csrBase64,
         },
       },
@@ -267,7 +271,7 @@ async function createNewCertificate(
       console.log("  ⚠️  Certificate limit reached, deleting oldest...");
       const existing = await ascApi(
         jwt,
-        "/certificates?filter[certificateType]=DISTRIBUTION"
+        `/certificates?filter[certificateType]=${certificateType}`
       );
       const allCerts = existing?.data ?? [];
       if (allCerts.length > 0) {
@@ -278,7 +282,7 @@ async function createNewCertificate(
           data: {
             type: "certificates",
             attributes: {
-              certificateType: "DISTRIBUTION",
+              certificateType,
               csrContent: csrBase64,
             },
           },

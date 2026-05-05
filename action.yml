@@ -3,7 +3,7 @@ description: Build and deploy a Flutter application
 
 inputs:
   platform:
-    description: Target platform (web, ios)
+    description: Target platform (web, ios, macos)
     required: true
   working-directory:
     description: Flutter project directory
@@ -22,7 +22,7 @@ inputs:
     required: false
     default: "false"
   certificate-private-key:
-    description: "RSA private key PEM for iOS code signing. Used to create or reuse distribution certificates. (ios)"
+    description: "RSA private key PEM for code signing. Used to create or reuse Apple Distribution certificates (ios) or Developer ID Application certificates (macos)."
     required: false
     default: ""
   asc-key-id:
@@ -45,6 +45,26 @@ inputs:
     description: "Override the build number from pubspec.yaml. Useful for auto-incrementing with CI run numbers (e.g. OPENCI_RUN_NUMBER)."
     required: false
     default: ""
+  macos-app-path:
+    description: "Path to the built .app bundle, relative to working-directory. Auto-detected from build/macos/Build/Products/Release when omitted. (macos)"
+    required: false
+    default: ""
+  macos-entitlements-path:
+    description: "Path to the macOS entitlements plist, relative to working-directory. (macos)"
+    required: false
+    default: "macos/Runner/Release.entitlements"
+  artifact-name:
+    description: "Base name for the packaged artifact zip. Defaults to the .app name plus -macos. (macos)"
+    required: false
+    default: ""
+  output-directory:
+    description: "Directory for packaged artifacts, relative to working-directory. (macos)"
+    required: false
+    default: "build/openci-artifacts"
+
+outputs:
+  artifact-path:
+    description: "Path to the generated macOS artifact zip. (macos)"
 
 runs:
   using: node20

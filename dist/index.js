@@ -25802,13 +25802,13 @@ async function preflightCheck(jwt, bundleId, version, buildNumber) {
     console.log(`  ✅ Version ${version}+${buildNumber} is available for upload`);
 }
 /**
- * Try to find an existing valid DISTRIBUTION certificate.
+ * Try to find an existing valid signing certificate of the requested type.
  * If found, download and create a p12 with the provided private key.
  * If not found, create a new one using CSR from the provided key.
  */
-async function getOrCreateCertificate(jwt, certPrivateKeyPath, tmpDir) {
+async function getOrCreateCertificate(jwt, certPrivateKeyPath, tmpDir, certificateType = "DISTRIBUTION") {
     const password = "openci";
-    const existingCerts = await ascApi(jwt, "/certificates?filter[certificateType]=DISTRIBUTION");
+    const existingCerts = await ascApi(jwt, `/certificates?filter[certificateType]=${certificateType}`);
     const certs = existingCerts?.data ?? [];
     const validCerts = certs.filter((cert) => {
         const expDate = new Date(cert.attributes.expirationDate);
@@ -25831,12 +25831,12 @@ async function getOrCreateCertificate(jwt, certPrivateKeyPath, tmpDir) {
     else {
         console.log("  No valid certificates found, creating new...");
     }
-    return createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password);
+    return createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password, certificateType);
 }
-async function createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password) {
+async function createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password, certificateType) {
     const csrPemPath = `${tmpDir}/csr.pem`;
     const csrDerPath = `${tmpDir}/csr.der`;
-    await (0, helpers_1.exec)(`openssl req -new -key "${certPrivateKeyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI Distribution/C=JP/O=OpenCI"`, { silent: true });
+    await (0, helpers_1.exec)(`openssl req -new -key "${certPrivateKeyPath}" -out "${csrPemPath}" -subj "/CN=OpenCI ${certificateType}/C=JP/O=OpenCI"`, { silent: true });
     await (0, helpers_1.exec)(`openssl req -in "${csrPemPath}" -outform DER -out "${csrDerPath}"`, { silent: true });
     const csrBase64 = (await (0, helpers_1.execAndCapture)(`base64 -i "${csrDerPath}"`)).replace(/\n/g, "");
     let certResponse;
@@ -25845,7 +25845,7 @@ async function createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password) {
             data: {
                 type: "certificates",
                 attributes: {
-                    certificateType: "DISTRIBUTION",
+                    certificateType,
                     csrContent: csrBase64,
                 },
             },
@@ -25855,7 +25855,7 @@ async function createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password) {
         const msg = String(e);
         if (msg.includes("409") || msg.includes("CONFLICT")) {
             console.log("  ⚠️  Certificate limit reached, deleting oldest...");
-            const existing = await ascApi(jwt, "/certificates?filter[certificateType]=DISTRIBUTION");
+            const existing = await ascApi(jwt, `/certificates?filter[certificateType]=${certificateType}`);
             const allCerts = existing?.data ?? [];
             if (allCerts.length > 0) {
                 const oldest = allCerts[allCerts.length - 1];
@@ -25865,7 +25865,7 @@ async function createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password) {
                     data: {
                         type: "certificates",
                         attributes: {
-                            certificateType: "DISTRIBUTION",
+                            certificateType,
                             csrContent: csrBase64,
                         },
                     },
@@ -26068,6 +26068,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
 const web_1 = __nccwpck_require__(5621);
 const ios_1 = __nccwpck_require__(2722);
+const macos_1 = __nccwpck_require__(6446);
 async function run() {
     try {
         const platform = core.getInput("platform", { required: true });
@@ -26077,6 +26078,9 @@ async function run() {
                 break;
             case "ios":
                 await (0, ios_1.buildAndSignIos)();
+                break;
+            case "macos":
+                await (0, macos_1.buildSignAndNotarizeMacos)();
                 break;
             default:
                 throw new Error(`Unsupported platform: ${platform}`);
@@ -26395,6 +26399,226 @@ function parseVersion(workingDirectory) {
     const raw = match[1];
     const [version, buildNumber] = raw.includes("+") ? raw.split("+") : [raw, "1"];
     return { version, buildNumber };
+}
+
+
+/***/ }),
+
+/***/ 6446:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.buildSignAndNotarizeMacos = buildSignAndNotarizeMacos;
+const core = __importStar(__nccwpck_require__(7484));
+const fs = __importStar(__nccwpck_require__(9896));
+const os = __importStar(__nccwpck_require__(857));
+const path = __importStar(__nccwpck_require__(6928));
+const asc_1 = __nccwpck_require__(6350);
+const helpers_1 = __nccwpck_require__(1302);
+const KEYCHAIN_NAME = "openci-macos-build.keychain";
+const KEYCHAIN_PASSWORD = "openci_temp_password";
+async function buildSignAndNotarizeMacos() {
+    const workingDirectory = core.getInput("working-directory") || ".";
+    const buildArgs = core.getInput("build-args") || "";
+    const certPrivateKey = core.getInput("certificate-private-key", { required: true }).replace(/\\n/g, "\n");
+    const ascKeyId = core.getInput("asc-key-id", { required: true });
+    const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
+    const ascPrivateKey = core.getInput("asc-private-key", { required: true }).replace(/\\n/g, "\n");
+    const entitlementsPath = core.getInput("macos-entitlements-path") || "macos/Runner/Release.entitlements";
+    const appPathInput = core.getInput("macos-app-path") || "";
+    const artifactNameInput = core.getInput("artifact-name") || "";
+    const outputDirectory = core.getInput("output-directory") || "build/openci-artifacts";
+    const buildNumberInput = core.getInput("build-number") || "";
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-macos-"));
+    const apiKeyDest = path.join(os.homedir(), "private_keys", `AuthKey_${ascKeyId}.p8`);
+    try {
+        console.log("OpenCI macOS Build, Sign & Notarize");
+        console.log(`   Working directory: ${workingDirectory}`);
+        console.log("");
+        core.startGroup("Step 1: Generating App Store Connect JWT");
+        const ascKeyPath = path.join(tmpDir, "AuthKey.p8");
+        fs.writeFileSync(ascKeyPath, ascPrivateKey);
+        const jwt = (0, asc_1.generateAscJwt)(ascKeyId, ascIssuerId, ascKeyPath);
+        console.log("  JWT generated");
+        core.endGroup();
+        core.startGroup("Step 2: Setting up Developer ID Application certificate");
+        const certKeyPath = path.join(tmpDir, "cert_key.pem");
+        fs.writeFileSync(certKeyPath, certPrivateKey);
+        const cert = await (0, asc_1.getOrCreateCertificate)(jwt, certKeyPath, tmpDir, "DEVELOPER_ID_APPLICATION");
+        console.log(`  Certificate ID: ${cert.certificateId}`);
+        core.endGroup();
+        core.startGroup("Step 3: Setting up temporary keychain");
+        await setupKeychain();
+        await importCertificate(cert.p12Base64, cert.password, tmpDir);
+        const signingIdentity = await findDeveloperIdIdentity();
+        console.log(`  Signing identity: ${signingIdentity}`);
+        core.endGroup();
+        core.startGroup("Step 4: Building macOS app");
+        const buildNumberArg = buildNumberInput ? `--build-number=${shellQuote(buildNumberInput)}` : "";
+        await (0, helpers_1.exec)(`flutter build macos --release ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
+        const appPath = appPathInput
+            ? path.resolve(workingDirectory, appPathInput)
+            : path.resolve(findBuiltAppPath(workingDirectory));
+        console.log(`  App built: ${appPath}`);
+        core.endGroup();
+        core.startGroup("Step 5: Code signing app");
+        const resolvedEntitlementsPath = path.resolve(workingDirectory, entitlementsPath);
+        await signApp(appPath, signingIdentity, resolvedEntitlementsPath);
+        await (0, helpers_1.exec)(`codesign --verify --deep --strict --verbose=2 ${shellQuote(appPath)}`);
+        console.log("  App signed and verified");
+        core.endGroup();
+        core.startGroup("Step 6: Notarizing app");
+        fs.mkdirSync(path.dirname(apiKeyDest), { recursive: true });
+        fs.copyFileSync(ascKeyPath, apiKeyDest);
+        const appName = path.basename(appPath, ".app");
+        const artifactBaseName = sanitizeArtifactName(artifactNameInput || `${appName}-macos`);
+        const notarizationZipPath = path.join(tmpDir, `${artifactBaseName}-notary.zip`);
+        await createZip(appPath, notarizationZipPath);
+        await (0, helpers_1.exec)([
+            "xcrun notarytool submit",
+            shellQuote(notarizationZipPath),
+            "--key",
+            shellQuote(apiKeyDest),
+            "--key-id",
+            shellQuote(ascKeyId),
+            "--issuer",
+            shellQuote(ascIssuerId),
+            "--wait",
+        ].join(" "));
+        await (0, helpers_1.exec)(`xcrun stapler staple ${shellQuote(appPath)}`);
+        await (0, helpers_1.exec)(`spctl --assess --type execute --verbose ${shellQuote(appPath)}`);
+        console.log("  App notarized and stapled");
+        core.endGroup();
+        core.startGroup("Step 7: Packaging artifact");
+        const outputDir = path.resolve(workingDirectory, outputDirectory);
+        fs.mkdirSync(outputDir, { recursive: true });
+        const finalZipPath = path.join(outputDir, `${artifactBaseName}.zip`);
+        await createZip(appPath, finalZipPath);
+        core.setOutput("artifact-path", finalZipPath);
+        console.log(`  Artifact: ${finalZipPath}`);
+        core.endGroup();
+        core.startGroup("Cleanup");
+        await cleanupKeychain();
+        fs.rmSync(apiKeyDest, { force: true });
+        console.log("  Temporary keychain and API key removed");
+        core.endGroup();
+        console.log("");
+        console.log("macOS Build, Sign & Notarize complete!");
+        console.log(`   Artifact: ${finalZipPath}`);
+    }
+    finally {
+        await cleanupKeychain();
+        fs.rmSync(apiKeyDest, { force: true });
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+}
+async function setupKeychain() {
+    await (0, helpers_1.exec)(`security delete-keychain ${shellQuote(KEYCHAIN_NAME)}`, { silent: true }).catch(() => { });
+    await (0, helpers_1.exec)(`security create-keychain -p ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(KEYCHAIN_NAME)}`);
+    await (0, helpers_1.exec)(`security unlock-keychain -p ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(KEYCHAIN_NAME)}`);
+    await (0, helpers_1.exec)(`security set-keychain-settings -t 3600 -u ${shellQuote(KEYCHAIN_NAME)}`);
+    await (0, helpers_1.exec)(`security list-keychains -d user -s ${shellQuote(KEYCHAIN_NAME)} login.keychain-db`);
+}
+async function importCertificate(p12Base64, password, tmpDir) {
+    const p12Path = path.join(tmpDir, "developer-id.p12");
+    fs.writeFileSync(p12Path, Buffer.from(p12Base64, "base64"));
+    await (0, helpers_1.exec)(`security import ${shellQuote(p12Path)} -k ${shellQuote(KEYCHAIN_NAME)} -P ${shellQuote(password)} -T /usr/bin/codesign -T /usr/bin/security`);
+    await (0, helpers_1.exec)(`security set-key-partition-list -S "apple-tool:,apple:,codesign:" -k ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(KEYCHAIN_NAME)}`);
+    fs.rmSync(p12Path, { force: true });
+}
+async function cleanupKeychain() {
+    await (0, helpers_1.exec)("security default-keychain -s login.keychain-db", { silent: true }).catch(() => { });
+    await (0, helpers_1.exec)("security list-keychains -d user -s login.keychain-db", { silent: true }).catch(() => { });
+    await (0, helpers_1.exec)(`security delete-keychain ${shellQuote(KEYCHAIN_NAME)}`, { silent: true }).catch(() => { });
+}
+async function findDeveloperIdIdentity() {
+    const output = await (0, helpers_1.execAndCapture)(`security find-identity -v -p codesigning ${shellQuote(KEYCHAIN_NAME)}`);
+    const match = output.match(/"([^"]*Developer ID Application[^"]*)"/);
+    if (!match?.[1]) {
+        throw new Error(`Developer ID Application signing identity not found in ${KEYCHAIN_NAME}`);
+    }
+    return match[1];
+}
+function findBuiltAppPath(workingDirectory) {
+    const releaseDir = path.join(workingDirectory, "build", "macos", "Build", "Products", "Release");
+    if (!fs.existsSync(releaseDir)) {
+        throw new Error(`macOS release build directory not found: ${releaseDir}`);
+    }
+    const apps = fs
+        .readdirSync(releaseDir)
+        .filter((entry) => entry.endsWith(".app"))
+        .sort();
+    if (apps.length === 0) {
+        throw new Error(`No .app bundle found in ${releaseDir}`);
+    }
+    return path.join(releaseDir, apps[0]);
+}
+async function signApp(appPath, signingIdentity, entitlementsPath) {
+    if (!fs.existsSync(appPath)) {
+        throw new Error(`macOS app bundle not found: ${appPath}`);
+    }
+    if (!fs.existsSync(entitlementsPath)) {
+        throw new Error(`macOS entitlements file not found: ${entitlementsPath}`);
+    }
+    await (0, helpers_1.exec)([
+        "codesign",
+        "--force",
+        "--deep",
+        "--options",
+        "runtime",
+        "--timestamp",
+        "--entitlements",
+        shellQuote(entitlementsPath),
+        "--sign",
+        shellQuote(signingIdentity),
+        shellQuote(appPath),
+    ].join(" "));
+}
+async function createZip(appPath, zipPath) {
+    fs.rmSync(zipPath, { force: true });
+    await (0, helpers_1.exec)(`ditto -c -k --keepParent ${shellQuote(appPath)} ${shellQuote(zipPath)}`);
+}
+function sanitizeArtifactName(value) {
+    const sanitized = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    return sanitized || "macos-app";
+}
+function shellQuote(value) {
+    return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 
