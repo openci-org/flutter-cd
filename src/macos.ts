@@ -64,7 +64,10 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
 
     core.startGroup("Step 3: Building macOS app");
     const buildNumberArg = buildNumberInput ? `--build-number=${shellQuote(buildNumberInput)}` : "";
-    await exec(`flutter build macos --release ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
+    await exec(
+      `CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO flutter build macos --release ${buildNumberArg} ${buildArgs}`.trim(),
+      { cwd: workingDirectory }
+    );
     const appPath = appPathInput
       ? path.resolve(workingDirectory, appPathInput)
       : path.resolve(findBuiltAppPath(workingDirectory));
