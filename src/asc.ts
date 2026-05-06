@@ -368,11 +368,18 @@ export interface ProfileResult {
   uuid: string;
 }
 
+export async function listEnabledDeviceIds(jwt: string): Promise<string[]> {
+  const response = await ascApi(jwt, "/devices?filter[status]=ENABLED&limit=200");
+  const devices = response?.data ?? [];
+  return devices.map((device: any) => device.id as string);
+}
+
 export async function createProvisioningProfile(
   jwt: string,
   certificateId: string,
   bundleIdentifier: string,
-  profileType: string
+  profileType: string,
+  deviceIds: string[] = []
 ): Promise<ProfileResult> {
   const bundleIdResponse = await ascApi(
     jwt,
@@ -386,11 +393,12 @@ export async function createProvisioningProfile(
   }
   const bundleIdResourceId = bundleIds[0].id as string;
 
+  const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
   const allProfiles = await ascApi(jwt, "/profiles?limit=200");
   const profiles = allProfiles?.data ?? [];
   for (const profile of profiles) {
     const name = profile.attributes?.name ?? "";
-    if (name.startsWith("OpenCI ") && name.includes(bundleIdentifier)) {
+    if (name.startsWith(`OpenCI ${label} `) && name.includes(bundleIdentifier)) {
       console.log(`  🗑️  Deleting stale profile: ${name}`);
       await ascApi(jwt, `/profiles/${profile.id}`, "DELETE").catch(() => {});
     }
@@ -400,21 +408,32 @@ export async function createProvisioningProfile(
     .toISOString()
     .replace(/[:.]/g, "-")
     .substring(0, 19);
-  const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
   const profileName = `OpenCI ${label} ${bundleIdentifier} ${timestamp}`;
+  const relationships: any = {
+    bundleId: {
+      data: { type: "bundleIds", id: bundleIdResourceId },
+    },
+    certificates: {
+      data: [{ type: "certificates", id: certificateId }],
+    },
+  };
+
+  if (profileType !== "IOS_APP_STORE") {
+    if (deviceIds.length === 0) {
+      throw new Error(
+        `No enabled Apple Developer devices found for ${profileType}. Register test devices before creating an ad-hoc provisioning profile.`
+      );
+    }
+    relationships.devices = {
+      data: deviceIds.map((id) => ({ type: "devices", id })),
+    };
+  }
 
   const response = await ascApi(jwt, "/profiles", "POST", {
     data: {
       type: "profiles",
       attributes: { name: profileName, profileType },
-      relationships: {
-        bundleId: {
-          data: { type: "bundleIds", id: bundleIdResourceId },
-        },
-        certificates: {
-          data: [{ type: "certificates", id: certificateId }],
-        },
-      },
+      relationships,
     },
   });
 

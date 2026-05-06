@@ -53,6 +53,14 @@ inputs:
     description: "Override the build number from pubspec.yaml. Useful for auto-incrementing with CI run numbers (e.g. OPENCI_RUN_NUMBER)."
     required: false
     default: ""
+  distribution-method:
+    description: "iOS export distribution method: app-store or ad-hoc. Use ad-hoc for Firebase App Distribution."
+    required: false
+    default: "app-store"
+  upload-to-app-store-connect:
+    description: "Whether to upload the generated iOS IPA to App Store Connect. Defaults to true for app-store distribution and false otherwise."
+    required: false
+    default: ""
   macos-app-path:
     description: "Path to the built .app bundle, relative to working-directory. Auto-detected from build/macos/Build/Products/Release when omitted. (macos)"
     required: false
@@ -71,6 +79,12 @@ inputs:
     default: "build/openci-artifacts"
 
 outputs:
+  ipa-path:
+    description: "Path to the generated iOS IPA. (ios)"
+  artifact-directory:
+    description: "Directory containing generated build artifacts. For iOS this contains the IPA. (ios)"
+  distribution-method:
+    description: "The iOS distribution method used to export the IPA. (ios)"
   artifact-path:
     description: "Path to the generated macOS artifact zip. (macos)"
 

@@ -25686,6 +25686,7 @@ exports.generateAscJwt = generateAscJwt;
 exports.ascApi = ascApi;
 exports.preflightCheck = preflightCheck;
 exports.getOrCreateCertificate = getOrCreateCertificate;
+exports.listEnabledDeviceIds = listEnabledDeviceIds;
 exports.createProvisioningProfile = createProvisioningProfile;
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs = __importStar(__nccwpck_require__(9896));
@@ -25914,18 +25915,24 @@ async function buildP12FromCert(certContentBase64, privateKeyPath, tmpDir, passw
     fs.rmSync(p12Path, { force: true });
     return p12Base64;
 }
-async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, profileType) {
+async function listEnabledDeviceIds(jwt) {
+    const response = await ascApi(jwt, "/devices?filter[status]=ENABLED&limit=200");
+    const devices = response?.data ?? [];
+    return devices.map((device) => device.id);
+}
+async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, profileType, deviceIds = []) {
     const bundleIdResponse = await ascApi(jwt, `/bundleIds?filter[identifier]=${bundleIdentifier}`);
     const bundleIds = bundleIdResponse?.data ?? [];
     if (bundleIds.length === 0) {
         throw new Error(`Bundle ID not found: ${bundleIdentifier}. Register it in Apple Developer Portal first.`);
     }
     const bundleIdResourceId = bundleIds[0].id;
+    const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
     const allProfiles = await ascApi(jwt, "/profiles?limit=200");
     const profiles = allProfiles?.data ?? [];
     for (const profile of profiles) {
         const name = profile.attributes?.name ?? "";
-        if (name.startsWith("OpenCI ") && name.includes(bundleIdentifier)) {
+        if (name.startsWith(`OpenCI ${label} `) && name.includes(bundleIdentifier)) {
             console.log(`  🗑️  Deleting stale profile: ${name}`);
             await ascApi(jwt, `/profiles/${profile.id}`, "DELETE").catch(() => { });
         }
@@ -25934,20 +25941,28 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, p
         .toISOString()
         .replace(/[:.]/g, "-")
         .substring(0, 19);
-    const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
     const profileName = `OpenCI ${label} ${bundleIdentifier} ${timestamp}`;
+    const relationships = {
+        bundleId: {
+            data: { type: "bundleIds", id: bundleIdResourceId },
+        },
+        certificates: {
+            data: [{ type: "certificates", id: certificateId }],
+        },
+    };
+    if (profileType !== "IOS_APP_STORE") {
+        if (deviceIds.length === 0) {
+            throw new Error(`No enabled Apple Developer devices found for ${profileType}. Register test devices before creating an ad-hoc provisioning profile.`);
+        }
+        relationships.devices = {
+            data: deviceIds.map((id) => ({ type: "devices", id })),
+        };
+    }
     const response = await ascApi(jwt, "/profiles", "POST", {
         data: {
             type: "profiles",
             attributes: { name: profileName, profileType },
-            relationships: {
-                bundleId: {
-                    data: { type: "bundleIds", id: bundleIdResourceId },
-                },
-                certificates: {
-                    data: [{ type: "certificates", id: certificateId }],
-                },
-            },
+            relationships,
         },
     });
     return {
@@ -26148,6 +26163,12 @@ const helpers_1 = __nccwpck_require__(1302);
 const asc_1 = __nccwpck_require__(6350);
 const KEYCHAIN_NAME = "openci-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
+function parseDistributionMethod(value) {
+    if (value === "app-store" || value === "ad-hoc") {
+        return value;
+    }
+    throw new Error(`Unsupported iOS distribution-method: ${value}. Use "app-store" or "ad-hoc".`);
+}
 async function buildAndSignIos() {
     const workingDirectory = core.getInput("working-directory") || ".";
     const buildArgs = core.getInput("build-args") || "";
@@ -26158,12 +26179,18 @@ async function buildAndSignIos() {
     const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
     const ascPrivateKey = core.getInput("asc-private-key", { required: true }).replace(/\\n/g, "\n");
     const buildNumberInput = core.getInput("build-number") || "";
+    const distributionMethod = parseDistributionMethod(core.getInput("distribution-method") || "app-store");
+    const uploadToAppStoreConnectInput = core.getInput("upload-to-app-store-connect") || "";
+    const uploadToAppStoreConnect = uploadToAppStoreConnectInput
+        ? uploadToAppStoreConnectInput === "true"
+        : distributionMethod === "app-store";
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-ios-"));
     try {
         console.log("🚀 OpenCI iOS Sign & Build");
         console.log(`   Bundle ID: ${bundleId}`);
         console.log(`   Apple Team ID: ${appleTeamId}`);
         console.log(`   Scheme: ${scheme}`);
+        console.log(`   Distribution: ${distributionMethod}`);
         console.log("");
         // ── Step 1: Generate ASC JWT ────────────────────────────
         core.startGroup("Step 1: Generating App Store Connect JWT");
@@ -26178,7 +26205,12 @@ async function buildAndSignIos() {
         const version = parsed.version;
         const buildNumber = buildNumberInput || parsed.buildNumber;
         console.log(`   Version: ${version}+${buildNumber}`);
-        await (0, asc_1.preflightCheck)(jwt, bundleId, version, buildNumber);
+        if (uploadToAppStoreConnect) {
+            await (0, asc_1.preflightCheck)(jwt, bundleId, version, buildNumber);
+        }
+        else {
+            console.log("  Skipping App Store Connect upload preflight check");
+        }
         core.endGroup();
         // ── Step 3: Get or create distribution certificate ──────
         core.startGroup("Step 3: Setting up distribution certificate");
@@ -26189,7 +26221,9 @@ async function buildAndSignIos() {
         core.endGroup();
         // ── Step 4: Create provisioning profile ─────────────────
         core.startGroup("Step 4: Creating provisioning profile");
-        const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, "IOS_APP_STORE");
+        const profileType = distributionMethod === "app-store" ? "IOS_APP_STORE" : "IOS_APP_ADHOC";
+        const deviceIds = distributionMethod === "ad-hoc" ? await (0, asc_1.listEnabledDeviceIds)(jwt) : [];
+        const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, profileType, deviceIds);
         console.log(`  ✅ Profile created`);
         console.log(`     Name: ${profile.name}`);
         console.log(`     UUID: ${profile.uuid}`);
@@ -26217,7 +26251,7 @@ async function buildAndSignIos() {
         // ── Step 9: Generate ExportOptions.plist ────────────────
         core.startGroup("Step 9: Generating ExportOptions.plist");
         const exportOptionsPath = path.resolve(workingDirectory, "ExportOptions.plist");
-        generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.name);
+        generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.name, distributionMethod);
         console.log("  ✅ ExportOptions.plist generated");
         core.endGroup();
         // ── Step 10: Flutter build IPA ──────────────────────────
@@ -26239,16 +26273,24 @@ async function buildAndSignIos() {
         }
         console.log("  ✅ IPA built and exported");
         core.endGroup();
-        // ── Step 11: Upload to App Store Connect ─────────────────
-        core.startGroup("Step 11: Uploading to App Store Connect");
         const ipaPath = path.resolve(ipaDir, ipaFiles[0]);
-        console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
-        const uploadOutput = await (0, helpers_1.execAndCapture)(`xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}" 2>&1`);
-        if (uploadOutput.includes("ERROR")) {
-            throw new Error(`Upload to App Store Connect failed:\n${uploadOutput.trim()}`);
+        core.setOutput("ipa-path", ipaPath);
+        core.setOutput("artifact-directory", path.resolve(ipaDir));
+        core.setOutput("distribution-method", distributionMethod);
+        if (uploadToAppStoreConnect) {
+            // ── Step 11: Upload to App Store Connect ─────────────────
+            core.startGroup("Step 11: Uploading to App Store Connect");
+            console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
+            const uploadOutput = await (0, helpers_1.execAndCapture)(`xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}" 2>&1`);
+            if (uploadOutput.includes("ERROR")) {
+                throw new Error(`Upload to App Store Connect failed:\n${uploadOutput.trim()}`);
+            }
+            console.log("  ✅ IPA uploaded to App Store Connect");
+            core.endGroup();
         }
-        console.log("  ✅ IPA uploaded to App Store Connect");
-        core.endGroup();
+        else {
+            console.log("  Skipping App Store Connect upload");
+        }
         // ── Cleanup ─────────────────────────────────────────────
         core.startGroup("Cleanup");
         await cleanupKeychain();
@@ -26256,8 +26298,8 @@ async function buildAndSignIos() {
         console.log("  ✅ Temporary keychain and API key removed");
         core.endGroup();
         console.log("");
-        console.log("🎉 iOS Sign, Build & Upload complete!");
-        console.log(`   IPA: ${path.join(workingDirectory, "build", "ios", "ipa")}`);
+        console.log("🎉 iOS Sign & Build complete!");
+        console.log(`   IPA: ${ipaPath}`);
     }
     finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -26329,13 +26371,13 @@ function editXcodeProject(workingDirectory, bundleId, appleTeamId, profile) {
 // ══════════════════════════════════════════════════════════════
 // ExportOptions.plist
 // ══════════════════════════════════════════════════════════════
-function generateExportOptions(outputPath, teamId, bundleId, profileName) {
+function generateExportOptions(outputPath, teamId, bundleId, profileName, distributionMethod) {
     const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>app-store</string>
+    <string>${distributionMethod}</string>
     <key>teamID</key>
     <string>${teamId}</string>
     <key>signingStyle</key>

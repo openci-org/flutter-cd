@@ -9,7 +9,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 ### Web — Production Deploy
 
 ```yaml
-- uses: openci-org/flutter-cd@v2.0.2
+- uses: openci-org/flutter-cd@v2.0.8
   with:
     platform: "web"
     working-directory: "apps/dashboard"
@@ -19,7 +19,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 ### Web — Preview Deploy (for PRs)
 
 ```yaml
-- uses: openci-org/flutter-cd@v2.0.2
+- uses: openci-org/flutter-cd@v2.0.8
   with:
     platform: "web"
     working-directory: "apps/dashboard"
@@ -30,7 +30,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 ### iOS — Build & Upload to TestFlight
 
 ```yaml
-- uses: openci-org/flutter-cd@v2.0.2
+- uses: openci-org/flutter-cd@v2.0.8
   with:
     platform: "ios"
     working-directory: "apps/dashboard"
@@ -40,10 +40,25 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
     asc-private-key: ${{ secrets.ASC_PRIVATE_KEY }}
 ```
 
+### iOS — Build for Firebase App Distribution
+
+```yaml
+- uses: openci-org/flutter-cd@v2.0.8
+  id: ios-build
+  with:
+    platform: "ios"
+    working-directory: "apps/dashboard"
+    distribution-method: "ad-hoc"
+    certificate-private-key: ${{ secrets.OPENCI_CERTIFICATE_PRIVATE_KEY }}
+    asc-key-id: ${{ secrets.ASC_KEY_ID }}
+    asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+    asc-private-key: ${{ secrets.ASC_PRIVATE_KEY }}
+```
+
 ### macOS — Build, Sign & Notarize
 
 ```yaml
-- uses: openci-org/flutter-cd@v2.0.2
+- uses: openci-org/flutter-cd@v2.0.8
   with:
     platform: "macos"
     working-directory: "apps/dashboard"
@@ -74,6 +89,8 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 | `developer-id-certificate-password` | Password for `developer-id-certificate-p12` (macos) | No | `""` |
 | `scheme` | Xcode scheme name (ios) | No | `"Runner"` |
 | `build-number` | Override the build number from pubspec.yaml (ios, macos) | No | `""` |
+| `distribution-method` | iOS export method (`app-store`, `ad-hoc`) | No | `"app-store"` |
+| `upload-to-app-store-connect` | Upload the generated iOS IPA to App Store Connect; defaults to true for `app-store` and false for `ad-hoc` | No | `""` |
 | `macos-app-path` | Path to the built `.app`, relative to `working-directory`; auto-detected when omitted (macos) | No | `""` |
 | `macos-entitlements-path` | Path to the macOS entitlements plist, relative to `working-directory` (macos) | No | `macos/Runner/Release.entitlements` |
 | `artifact-name` | Base name for the packaged artifact zip (macos) | No | `.app` name + `-macos` |
@@ -100,8 +117,9 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
    - **Xcode Config**: Modifies `project.pbxproj` for manual signing with `sed`
    - **Archive**: Builds with `xcodebuild archive`
    - **Export**: Exports IPA with `xcodebuild -exportArchive`
-3. Uploads to TestFlight (if `upload-to-testflight` is `"true"`)
-4. Cleans up temporary keychain and credentials
+3. Exposes the generated IPA via `ipa-path` and `artifact-directory` outputs
+4. Uploads to App Store Connect by default for `app-store` distribution
+5. Cleans up temporary keychain and credentials
 
 ### macOS (`platform: macos`)
 
