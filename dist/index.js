@@ -26579,12 +26579,33 @@ async function cleanupKeychain() {
     await (0, helpers_1.exec)(`security delete-keychain ${shellQuote(KEYCHAIN_NAME)}`, { silent: true }).catch(() => { });
 }
 async function findDeveloperIdIdentity() {
-    const output = await (0, helpers_1.execAndCapture)(`security find-identity -v -p codesigning ${shellQuote(KEYCHAIN_NAME)}`);
-    const match = output.match(/"([^"]*Developer ID Application[^"]*)"/);
-    if (!match?.[1]) {
-        throw new Error(`Developer ID Application signing identity not found in ${KEYCHAIN_NAME}`);
+    const keychainPath = path.join(os.homedir(), "Library", "Keychains", `${KEYCHAIN_NAME}-db`);
+    const commands = [
+        `security find-identity -v -p codesigning ${shellQuote(keychainPath)}`,
+        `security find-identity -v -p codesigning ${shellQuote(KEYCHAIN_NAME)}`,
+        "security find-identity -v -p codesigning",
+    ];
+    const outputs = [];
+    for (const command of commands) {
+        const output = await (0, helpers_1.execAndCapture)(command).catch(() => "");
+        outputs.push(output);
+        const identities = parseSigningIdentities(output);
+        const developerIdIdentity = identities.find((identity) => identity.name.includes("Developer ID Application"));
+        if (developerIdIdentity) {
+            return developerIdIdentity.hash;
+        }
+        if (identities.length > 0) {
+            return identities[0].hash;
+        }
     }
-    return match[1];
+    throw new Error(`Developer ID Application signing identity not found in ${KEYCHAIN_NAME}. ` +
+        `find-identity output: ${outputs.join("\n").trim() || "(empty)"}`);
+}
+function parseSigningIdentities(output) {
+    return [...output.matchAll(/^\s*\d+\)\s+([A-Fa-f0-9]{40})\s+"([^"]+)"/gm)].map((match) => ({
+        hash: match[1],
+        name: match[2],
+    }));
 }
 function findBuiltAppPath(workingDirectory) {
     const releaseDir = path.join(workingDirectory, "build", "macos", "Build", "Products", "Release");
