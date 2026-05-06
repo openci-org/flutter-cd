@@ -26452,6 +26452,7 @@ const asc_1 = __nccwpck_require__(6350);
 const helpers_1 = __nccwpck_require__(1302);
 const KEYCHAIN_NAME = "openci-macos-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
+const DEVELOPER_ID_G2_CA_URL = "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer";
 async function buildSignAndNotarizeMacos() {
     const workingDirectory = core.getInput("working-directory") || ".";
     const buildArgs = core.getInput("build-args") || "";
@@ -26480,6 +26481,7 @@ async function buildSignAndNotarizeMacos() {
         core.endGroup();
         core.startGroup("Step 2: Setting up temporary keychain");
         await setupKeychain();
+        await installDeveloperIdCertificateAuthority(tmpDir);
         if (developerIdCertificateP12) {
             if (!developerIdCertificatePassword) {
                 throw new Error("developer-id-certificate-password is required when developer-id-certificate-p12 is provided");
@@ -26572,6 +26574,11 @@ async function importCertificate(p12Base64, password, tmpDir) {
     await (0, helpers_1.exec)(`security import ${shellQuote(p12Path)} -k ${shellQuote(KEYCHAIN_NAME)} -P ${shellQuote(password)} -T /usr/bin/codesign -T /usr/bin/security`);
     await (0, helpers_1.exec)(`security set-key-partition-list -S "apple-tool:,apple:,codesign:" -k ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(KEYCHAIN_NAME)}`);
     fs.rmSync(p12Path, { force: true });
+}
+async function installDeveloperIdCertificateAuthority(tmpDir) {
+    const certificatePath = path.join(tmpDir, "DeveloperIDG2CA.cer");
+    await (0, helpers_1.exec)(`curl -fsSL ${shellQuote(DEVELOPER_ID_G2_CA_URL)} -o ${shellQuote(certificatePath)}`);
+    await (0, helpers_1.exec)(`security import ${shellQuote(certificatePath)} -k ${shellQuote(KEYCHAIN_NAME)}`);
 }
 async function cleanupKeychain() {
     await (0, helpers_1.exec)("security default-keychain -s login.keychain-db", { silent: true }).catch(() => { });

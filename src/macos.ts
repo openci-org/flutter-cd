@@ -7,6 +7,7 @@ import { exec, execAndCapture } from "./helpers";
 
 const KEYCHAIN_NAME = "openci-macos-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
+const DEVELOPER_ID_G2_CA_URL = "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer";
 
 export async function buildSignAndNotarizeMacos(): Promise<void> {
   const workingDirectory = core.getInput("working-directory") || ".";
@@ -40,6 +41,7 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
 
     core.startGroup("Step 2: Setting up temporary keychain");
     await setupKeychain();
+    await installDeveloperIdCertificateAuthority(tmpDir);
     if (developerIdCertificateP12) {
       if (!developerIdCertificatePassword) {
         throw new Error("developer-id-certificate-password is required when developer-id-certificate-p12 is provided");
@@ -148,6 +150,12 @@ async function importCertificate(
     `security set-key-partition-list -S "apple-tool:,apple:,codesign:" -k ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(KEYCHAIN_NAME)}`
   );
   fs.rmSync(p12Path, { force: true });
+}
+
+async function installDeveloperIdCertificateAuthority(tmpDir: string): Promise<void> {
+  const certificatePath = path.join(tmpDir, "DeveloperIDG2CA.cer");
+  await exec(`curl -fsSL ${shellQuote(DEVELOPER_ID_G2_CA_URL)} -o ${shellQuote(certificatePath)}`);
+  await exec(`security import ${shellQuote(certificatePath)} -k ${shellQuote(KEYCHAIN_NAME)}`);
 }
 
 async function cleanupKeychain(): Promise<void> {
