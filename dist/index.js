@@ -26503,8 +26503,9 @@ async function buildSignAndNotarizeMacos() {
         console.log(`  Signing identity: ${signingIdentity}`);
         core.endGroup();
         core.startGroup("Step 3: Building macOS app");
+        const noSignXcconfigPath = prepareUnsignedMacosBuild(workingDirectory, tmpDir);
         const buildNumberArg = buildNumberInput ? `--build-number=${shellQuote(buildNumberInput)}` : "";
-        await (0, helpers_1.exec)(`CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO flutter build macos --release ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
+        await (0, helpers_1.exec)(`XCODE_XCCONFIG_FILE=${shellQuote(noSignXcconfigPath)} flutter build macos --release ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
         const appPath = appPathInput
             ? path.resolve(workingDirectory, appPathInput)
             : path.resolve(findBuiltAppPath(workingDirectory));
@@ -26579,6 +26580,40 @@ async function installDeveloperIdCertificateAuthority(tmpDir) {
     const certificatePath = path.join(tmpDir, "DeveloperIDG2CA.cer");
     await (0, helpers_1.exec)(`curl -fsSL ${shellQuote(DEVELOPER_ID_G2_CA_URL)} -o ${shellQuote(certificatePath)}`);
     await (0, helpers_1.exec)(`security import ${shellQuote(certificatePath)} -k ${shellQuote(KEYCHAIN_NAME)}`);
+}
+function prepareUnsignedMacosBuild(workingDirectory, tmpDir) {
+    const noSignXcconfigPath = path.join(tmpDir, "openci-macos-nosign.xcconfig");
+    fs.writeFileSync(noSignXcconfigPath, [
+        "CODE_SIGNING_ALLOWED = NO",
+        "CODE_SIGNING_REQUIRED = NO",
+        "CODE_SIGN_IDENTITY =",
+        "CODE_SIGN_STYLE = Manual",
+        "DEVELOPMENT_TEAM =",
+        "PROVISIONING_PROFILE =",
+        "PROVISIONING_PROFILE_SPECIFIER =",
+        "EXPANDED_CODE_SIGN_IDENTITY =",
+        "",
+    ].join("\n"));
+    const projectPath = path.join(workingDirectory, "macos", "Runner.xcodeproj", "project.pbxproj");
+    if (!fs.existsSync(projectPath)) {
+        console.log(`  macOS Xcode project not found, using unsigned build xcconfig only: ${projectPath}`);
+        return noSignXcconfigPath;
+    }
+    const originalProject = fs.readFileSync(projectPath, "utf8");
+    const patchedProject = originalProject
+        .replace(/CODE_SIGN_IDENTITY = "Apple Development";/g, 'CODE_SIGN_IDENTITY = "";')
+        .replace(/"CODE_SIGN_IDENTITY\[sdk=macosx\*\]" = "Apple Development";/g, '"CODE_SIGN_IDENTITY[sdk=macosx*]" = "";')
+        .replace(/CODE_SIGN_STYLE = Automatic;/g, "CODE_SIGN_STYLE = Manual;")
+        .replace(/DEVELOPMENT_TEAM = [^;]+;/g, 'DEVELOPMENT_TEAM = "";')
+        .replace(/PROVISIONING_PROFILE_SPECIFIER = "[^"]*";/g, 'PROVISIONING_PROFILE_SPECIFIER = "";');
+    if (patchedProject !== originalProject) {
+        fs.writeFileSync(projectPath, patchedProject);
+        console.log("  Disabled Xcode build-time signing for macOS Runner project");
+    }
+    else {
+        console.log("  No Xcode signing settings needed patching");
+    }
+    return noSignXcconfigPath;
 }
 async function cleanupKeychain() {
     await (0, helpers_1.exec)("security default-keychain -s login.keychain-db", { silent: true }).catch(() => { });
