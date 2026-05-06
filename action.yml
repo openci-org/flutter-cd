@@ -34,7 +34,15 @@ inputs:
     required: false
     default: ""
   asc-private-key:
-    description: "App Store Connect API Private Key, .p8 PEM content (ios)"
+    description: "App Store Connect API Private Key, .p8 PEM content (ios, macos)"
+    required: false
+    default: ""
+  developer-id-certificate-p12:
+    description: "Base64-encoded Developer ID Application .p12 certificate to import directly. Avoids creating certificates via App Store Connect. (macos)"
+    required: false
+    default: ""
+  developer-id-certificate-password:
+    description: "Password for developer-id-certificate-p12. (macos)"
     required: false
     default: ""
   scheme:

@@ -11,10 +11,12 @@ const KEYCHAIN_PASSWORD = "openci_temp_password";
 export async function buildSignAndNotarizeMacos(): Promise<void> {
   const workingDirectory = core.getInput("working-directory") || ".";
   const buildArgs = core.getInput("build-args") || "";
-  const certPrivateKey = core.getInput("certificate-private-key", { required: true }).replace(/\\n/g, "\n");
+  const certPrivateKey = core.getInput("certificate-private-key").replace(/\\n/g, "\n");
   const ascKeyId = core.getInput("asc-key-id", { required: true });
   const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
   const ascPrivateKey = core.getInput("asc-private-key", { required: true }).replace(/\\n/g, "\n");
+  const developerIdCertificateP12 = core.getInput("developer-id-certificate-p12") || "";
+  const developerIdCertificatePassword = core.getInput("developer-id-certificate-password") || "";
   const entitlementsPath = core.getInput("macos-entitlements-path") || "macos/Runner/Release.entitlements";
   const appPathInput = core.getInput("macos-app-path") || "";
   const artifactNameInput = core.getInput("artifact-name") || "";
@@ -36,21 +38,29 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
     console.log("  JWT generated");
     core.endGroup();
 
-    core.startGroup("Step 2: Setting up Developer ID Application certificate");
-    const certKeyPath = path.join(tmpDir, "cert_key.pem");
-    fs.writeFileSync(certKeyPath, certPrivateKey);
-    const cert = await getOrCreateCertificate(jwt, certKeyPath, tmpDir, "DEVELOPER_ID_APPLICATION");
-    console.log(`  Certificate ID: ${cert.certificateId}`);
-    core.endGroup();
-
-    core.startGroup("Step 3: Setting up temporary keychain");
+    core.startGroup("Step 2: Setting up temporary keychain");
     await setupKeychain();
-    await importCertificate(cert.p12Base64, cert.password, tmpDir);
+    if (developerIdCertificateP12) {
+      if (!developerIdCertificatePassword) {
+        throw new Error("developer-id-certificate-password is required when developer-id-certificate-p12 is provided");
+      }
+      await importCertificate(developerIdCertificateP12, developerIdCertificatePassword, tmpDir);
+      console.log("  Imported provided Developer ID Application certificate");
+    } else {
+      if (!certPrivateKey) {
+        throw new Error("certificate-private-key is required when developer-id-certificate-p12 is not provided");
+      }
+      const certKeyPath = path.join(tmpDir, "cert_key.pem");
+      fs.writeFileSync(certKeyPath, certPrivateKey);
+      const cert = await getOrCreateCertificate(jwt, certKeyPath, tmpDir, "DEVELOPER_ID_APPLICATION");
+      await importCertificate(cert.p12Base64, cert.password, tmpDir);
+      console.log(`  Created or reused Developer ID Application certificate: ${cert.certificateId}`);
+    }
     const signingIdentity = await findDeveloperIdIdentity();
     console.log(`  Signing identity: ${signingIdentity}`);
     core.endGroup();
 
-    core.startGroup("Step 4: Building macOS app");
+    core.startGroup("Step 3: Building macOS app");
     const buildNumberArg = buildNumberInput ? `--build-number=${shellQuote(buildNumberInput)}` : "";
     await exec(`flutter build macos --release ${buildNumberArg} ${buildArgs}`.trim(), { cwd: workingDirectory });
     const appPath = appPathInput
@@ -59,14 +69,14 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
     console.log(`  App built: ${appPath}`);
     core.endGroup();
 
-    core.startGroup("Step 5: Code signing app");
+    core.startGroup("Step 4: Code signing app");
     const resolvedEntitlementsPath = path.resolve(workingDirectory, entitlementsPath);
     await signApp(appPath, signingIdentity, resolvedEntitlementsPath);
     await exec(`codesign --verify --deep --strict --verbose=2 ${shellQuote(appPath)}`);
     console.log("  App signed and verified");
     core.endGroup();
 
-    core.startGroup("Step 6: Notarizing app");
+    core.startGroup("Step 5: Notarizing app");
     fs.mkdirSync(path.dirname(apiKeyDest), { recursive: true });
     fs.copyFileSync(ascKeyPath, apiKeyDest);
     const appName = path.basename(appPath, ".app");
@@ -91,7 +101,7 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
     console.log("  App notarized and stapled");
     core.endGroup();
 
-    core.startGroup("Step 7: Packaging artifact");
+    core.startGroup("Step 6: Packaging artifact");
     const outputDir = path.resolve(workingDirectory, outputDirectory);
     fs.mkdirSync(outputDir, { recursive: true });
     const finalZipPath = path.join(outputDir, `${artifactBaseName}.zip`);

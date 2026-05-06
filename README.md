@@ -51,6 +51,8 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
     asc-key-id: ${{ secrets.ASC_KEY_ID }}
     asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
     asc-private-key: ${{ secrets.ASC_PRIVATE_KEY }}
+    developer-id-certificate-p12: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
+    developer-id-certificate-password: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
     build-args: "--dart-define=SENTRY_DSN=${{ secrets.SENTRY_DSN }}"
     artifact-name: "OpenCI-dashboard-macos"
 ```
@@ -68,6 +70,8 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 | `asc-key-id` | App Store Connect API Key ID (ios, macos) | No | `""` |
 | `asc-issuer-id` | App Store Connect API Issuer ID (ios, macos) | No | `""` |
 | `asc-private-key` | ASC API Private Key content, .p8 PEM (ios, macos) | No | `""` |
+| `developer-id-certificate-p12` | Base64-encoded Developer ID Application `.p12` certificate to import directly (macos) | No | `""` |
+| `developer-id-certificate-password` | Password for `developer-id-certificate-p12` (macos) | No | `""` |
 | `scheme` | Xcode scheme name (ios) | No | `"Runner"` |
 | `build-number` | Override the build number from pubspec.yaml (ios, macos) | No | `""` |
 | `macos-app-path` | Path to the built `.app`, relative to `working-directory`; auto-detected when omitted (macos) | No | `""` |
@@ -101,7 +105,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 
 ### macOS (`platform: macos`)
 
-1. Creates or reuses a Developer ID Application certificate via App Store Connect
+1. Imports a provided Developer ID Application `.p12`, or creates/reuses one via App Store Connect when only `certificate-private-key` is provided
 2. Imports the certificate into a temporary keychain
 3. Runs `flutter build macos --release`
 4. Signs the built `.app` with hardened runtime enabled
