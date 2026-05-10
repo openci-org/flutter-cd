@@ -368,6 +368,28 @@ export interface ProfileResult {
   uuid: string;
 }
 
+const PROFILE_TYPES_REQUIRING_DEVICES = new Set([
+  "IOS_APP_ADHOC",
+  "IOS_APP_DEVELOPMENT",
+  "TVOS_APP_ADHOC",
+  "TVOS_APP_DEVELOPMENT",
+  "MAC_APP_DEVELOPMENT",
+  "MAC_CATALYST_APP_DEVELOPMENT",
+]);
+
+function profileLabel(profileType: string): string {
+  switch (profileType) {
+    case "IOS_APP_STORE":
+      return "AppStore";
+    case "IOS_APP_ADHOC":
+      return "AdHoc";
+    case "MAC_APP_DIRECT":
+      return "MacDirect";
+    default:
+      return profileType.replace(/[^A-Za-z0-9]+/g, "");
+  }
+}
+
 export async function listEnabledDeviceIds(jwt: string): Promise<string[]> {
   const response = await ascApi(jwt, "/devices?filter[status]=ENABLED&limit=200");
   const devices = response?.data ?? [];
@@ -383,7 +405,7 @@ export async function createProvisioningProfile(
 ): Promise<ProfileResult> {
   const bundleIdResponse = await ascApi(
     jwt,
-    `/bundleIds?filter[identifier]=${bundleIdentifier}`
+    `/bundleIds?filter[identifier]=${encodeURIComponent(bundleIdentifier)}`
   );
   const bundleIds = bundleIdResponse?.data ?? [];
   if (bundleIds.length === 0) {
@@ -393,7 +415,7 @@ export async function createProvisioningProfile(
   }
   const bundleIdResourceId = bundleIds[0].id as string;
 
-  const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
+  const label = profileLabel(profileType);
   const allProfiles = await ascApi(jwt, "/profiles?limit=200");
   const profiles = allProfiles?.data ?? [];
   for (const profile of profiles) {
@@ -418,10 +440,10 @@ export async function createProvisioningProfile(
     },
   };
 
-  if (profileType !== "IOS_APP_STORE") {
+  if (PROFILE_TYPES_REQUIRING_DEVICES.has(profileType)) {
     if (deviceIds.length === 0) {
       throw new Error(
-        `No enabled Apple Developer devices found for ${profileType}. Register test devices before creating an ad-hoc provisioning profile.`
+        `No enabled Apple Developer devices found for ${profileType}. Register test devices before creating this provisioning profile.`
       );
     }
     relationships.devices = {
@@ -443,4 +465,83 @@ export async function createProvisioningProfile(
     profileContent: response.data.attributes.profileContent,
     uuid: response.data.attributes.uuid,
   };
+}
+
+export async function findDeveloperIdCertificateIdForP12(
+  jwt: string,
+  p12Base64: string,
+  password: string,
+  tmpDir: string
+): Promise<string> {
+  const p12Path = `${tmpDir}/developer-id-match.p12`;
+  const certPemPath = `${tmpDir}/developer-id-match.pem`;
+  const certDerPath = `${tmpDir}/developer-id-match.der`;
+
+  fs.writeFileSync(p12Path, Buffer.from(p12Base64, "base64"));
+
+  try {
+    await extractCertificateFromP12(p12Path, certPemPath, password);
+    await exec(
+      `openssl x509 -in ${shellQuote(certPemPath)} -outform DER -out ${shellQuote(certDerPath)}`,
+      { silent: true }
+    );
+    const localCertContent = normalizeBase64(
+      await execAndCapture(`base64 -i ${shellQuote(certDerPath)}`)
+    );
+
+    const existingCerts = await ascApi(
+      jwt,
+      "/certificates?filter[certificateType]=DEVELOPER_ID_APPLICATION&limit=200"
+    );
+    const certs = existingCerts?.data ?? [];
+
+    for (const cert of certs) {
+      const certificateContent = normalizeBase64(cert.attributes?.certificateContent ?? "");
+      if (certificateContent === localCertContent) {
+        return cert.id as string;
+      }
+    }
+
+    throw new Error(
+      "Provided Developer ID .p12 certificate was not found in App Store Connect. " +
+      "Use a Developer ID Application certificate from the same Apple Developer account, " +
+      "or let the action create/reuse one from certificate-private-key."
+    );
+  } finally {
+    fs.rmSync(p12Path, { force: true });
+    fs.rmSync(certPemPath, { force: true });
+    fs.rmSync(certDerPath, { force: true });
+  }
+}
+
+async function extractCertificateFromP12(
+  p12Path: string,
+  certPemPath: string,
+  password: string
+): Promise<void> {
+  const command = [
+    "openssl pkcs12",
+    "-in",
+    shellQuote(p12Path),
+    "-clcerts",
+    "-nokeys",
+    "-passin",
+    shellQuote(`pass:${password}`),
+    "-out",
+    shellQuote(certPemPath),
+  ].join(" ");
+
+  try {
+    await exec(command, { silent: true });
+  } catch {
+    await exec(`${command} -legacy`, { silent: true });
+  }
+}
+
+function normalizeBase64(value: string): string {
+  return value.replace(/\s/g, "");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

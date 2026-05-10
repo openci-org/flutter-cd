@@ -69,6 +69,10 @@ inputs:
     description: "Path to the macOS entitlements plist, relative to working-directory. (macos)"
     required: false
     default: "macos/Runner/Release.entitlements"
+  macos-provisioning-profile:
+    description: "Create and embed a MAC_APP_DIRECT provisioning profile, then sign with profile-derived entitlements. Required for Developer ID apps that use capabilities such as Keychain Sharing. (macos)"
+    required: false
+    default: "false"
   artifact-name:
     description: "Base name for the packaged artifact zip. Defaults to the .app name plus -macos. (macos)"
     required: false

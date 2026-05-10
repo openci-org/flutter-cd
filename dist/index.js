@@ -25688,6 +25688,7 @@ exports.preflightCheck = preflightCheck;
 exports.getOrCreateCertificate = getOrCreateCertificate;
 exports.listEnabledDeviceIds = listEnabledDeviceIds;
 exports.createProvisioningProfile = createProvisioningProfile;
+exports.findDeveloperIdCertificateIdForP12 = findDeveloperIdCertificateIdForP12;
 const crypto = __importStar(__nccwpck_require__(6982));
 const fs = __importStar(__nccwpck_require__(9896));
 const https = __importStar(__nccwpck_require__(5692));
@@ -25915,19 +25916,39 @@ async function buildP12FromCert(certContentBase64, privateKeyPath, tmpDir, passw
     fs.rmSync(p12Path, { force: true });
     return p12Base64;
 }
+const PROFILE_TYPES_REQUIRING_DEVICES = new Set([
+    "IOS_APP_ADHOC",
+    "IOS_APP_DEVELOPMENT",
+    "TVOS_APP_ADHOC",
+    "TVOS_APP_DEVELOPMENT",
+    "MAC_APP_DEVELOPMENT",
+    "MAC_CATALYST_APP_DEVELOPMENT",
+]);
+function profileLabel(profileType) {
+    switch (profileType) {
+        case "IOS_APP_STORE":
+            return "AppStore";
+        case "IOS_APP_ADHOC":
+            return "AdHoc";
+        case "MAC_APP_DIRECT":
+            return "MacDirect";
+        default:
+            return profileType.replace(/[^A-Za-z0-9]+/g, "");
+    }
+}
 async function listEnabledDeviceIds(jwt) {
     const response = await ascApi(jwt, "/devices?filter[status]=ENABLED&limit=200");
     const devices = response?.data ?? [];
     return devices.map((device) => device.id);
 }
 async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, profileType, deviceIds = []) {
-    const bundleIdResponse = await ascApi(jwt, `/bundleIds?filter[identifier]=${bundleIdentifier}`);
+    const bundleIdResponse = await ascApi(jwt, `/bundleIds?filter[identifier]=${encodeURIComponent(bundleIdentifier)}`);
     const bundleIds = bundleIdResponse?.data ?? [];
     if (bundleIds.length === 0) {
         throw new Error(`Bundle ID not found: ${bundleIdentifier}. Register it in Apple Developer Portal first.`);
     }
     const bundleIdResourceId = bundleIds[0].id;
-    const label = profileType === "IOS_APP_STORE" ? "AppStore" : "AdHoc";
+    const label = profileLabel(profileType);
     const allProfiles = await ascApi(jwt, "/profiles?limit=200");
     const profiles = allProfiles?.data ?? [];
     for (const profile of profiles) {
@@ -25950,9 +25971,9 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, p
             data: [{ type: "certificates", id: certificateId }],
         },
     };
-    if (profileType !== "IOS_APP_STORE") {
+    if (PROFILE_TYPES_REQUIRING_DEVICES.has(profileType)) {
         if (deviceIds.length === 0) {
-            throw new Error(`No enabled Apple Developer devices found for ${profileType}. Register test devices before creating an ad-hoc provisioning profile.`);
+            throw new Error(`No enabled Apple Developer devices found for ${profileType}. Register test devices before creating this provisioning profile.`);
         }
         relationships.devices = {
             data: deviceIds.map((id) => ({ type: "devices", id })),
@@ -25971,6 +25992,58 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, p
         profileContent: response.data.attributes.profileContent,
         uuid: response.data.attributes.uuid,
     };
+}
+async function findDeveloperIdCertificateIdForP12(jwt, p12Base64, password, tmpDir) {
+    const p12Path = `${tmpDir}/developer-id-match.p12`;
+    const certPemPath = `${tmpDir}/developer-id-match.pem`;
+    const certDerPath = `${tmpDir}/developer-id-match.der`;
+    fs.writeFileSync(p12Path, Buffer.from(p12Base64, "base64"));
+    try {
+        await extractCertificateFromP12(p12Path, certPemPath, password);
+        await (0, helpers_1.exec)(`openssl x509 -in ${shellQuote(certPemPath)} -outform DER -out ${shellQuote(certDerPath)}`, { silent: true });
+        const localCertContent = normalizeBase64(await (0, helpers_1.execAndCapture)(`base64 -i ${shellQuote(certDerPath)}`));
+        const existingCerts = await ascApi(jwt, "/certificates?filter[certificateType]=DEVELOPER_ID_APPLICATION&limit=200");
+        const certs = existingCerts?.data ?? [];
+        for (const cert of certs) {
+            const certificateContent = normalizeBase64(cert.attributes?.certificateContent ?? "");
+            if (certificateContent === localCertContent) {
+                return cert.id;
+            }
+        }
+        throw new Error("Provided Developer ID .p12 certificate was not found in App Store Connect. " +
+            "Use a Developer ID Application certificate from the same Apple Developer account, " +
+            "or let the action create/reuse one from certificate-private-key.");
+    }
+    finally {
+        fs.rmSync(p12Path, { force: true });
+        fs.rmSync(certPemPath, { force: true });
+        fs.rmSync(certDerPath, { force: true });
+    }
+}
+async function extractCertificateFromP12(p12Path, certPemPath, password) {
+    const command = [
+        "openssl pkcs12",
+        "-in",
+        shellQuote(p12Path),
+        "-clcerts",
+        "-nokeys",
+        "-passin",
+        shellQuote(`pass:${password}`),
+        "-out",
+        shellQuote(certPemPath),
+    ].join(" ");
+    try {
+        await (0, helpers_1.exec)(command, { silent: true });
+    }
+    catch {
+        await (0, helpers_1.exec)(`${command} -legacy`, { silent: true });
+    }
+}
+function normalizeBase64(value) {
+    return value.replace(/\s/g, "");
+}
+function shellQuote(value) {
+    return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 
@@ -26509,8 +26582,10 @@ async function buildSignAndNotarizeMacos() {
     const artifactNameInput = core.getInput("artifact-name") || "";
     const outputDirectory = core.getInput("output-directory") || "build/openci-artifacts";
     const buildNumberInput = core.getInput("build-number") || "";
+    const useProvisioningProfile = parseBooleanInput(core.getInput("macos-provisioning-profile") || "false", "macos-provisioning-profile");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-macos-"));
     const apiKeyDest = path.join(os.homedir(), "private_keys", `AuthKey_${ascKeyId}.p8`);
+    let developerIdCertificateId = "";
     try {
         console.log("OpenCI macOS Build, Sign & Notarize");
         console.log(`   Working directory: ${workingDirectory}`);
@@ -26529,6 +26604,10 @@ async function buildSignAndNotarizeMacos() {
                 throw new Error("developer-id-certificate-password is required when developer-id-certificate-p12 is provided");
             }
             await importCertificate(developerIdCertificateP12, developerIdCertificatePassword, tmpDir);
+            if (useProvisioningProfile) {
+                developerIdCertificateId = await (0, asc_1.findDeveloperIdCertificateIdForP12)(jwt, developerIdCertificateP12, developerIdCertificatePassword, tmpDir);
+                console.log(`  Matched Developer ID Application certificate in ASC: ${developerIdCertificateId}`);
+            }
             console.log("  Imported provided Developer ID Application certificate");
         }
         else {
@@ -26538,6 +26617,7 @@ async function buildSignAndNotarizeMacos() {
             const certKeyPath = path.join(tmpDir, "cert_key.pem");
             fs.writeFileSync(certKeyPath, certPrivateKey);
             const cert = await (0, asc_1.getOrCreateCertificate)(jwt, certKeyPath, tmpDir, "DEVELOPER_ID_APPLICATION");
+            developerIdCertificateId = cert.certificateId;
             await importCertificate(cert.p12Base64, cert.password, tmpDir);
             console.log(`  Created or reused Developer ID Application certificate: ${cert.certificateId}`);
         }
@@ -26554,7 +26634,18 @@ async function buildSignAndNotarizeMacos() {
         console.log(`  App built: ${appPath}`);
         core.endGroup();
         core.startGroup("Step 4: Code signing app");
-        const resolvedEntitlementsPath = path.resolve(workingDirectory, entitlementsPath);
+        let resolvedEntitlementsPath = path.resolve(workingDirectory, entitlementsPath);
+        if (useProvisioningProfile) {
+            if (!developerIdCertificateId) {
+                throw new Error("Developer ID Application certificate ID is required to create a MAC_APP_DIRECT provisioning profile");
+            }
+            const bundleIdentifier = await readBundleIdentifier(appPath);
+            console.log(`  Bundle ID: ${bundleIdentifier}`);
+            const profile = await (0, asc_1.createProvisioningProfile)(jwt, developerIdCertificateId, bundleIdentifier, "MAC_APP_DIRECT");
+            console.log(`  Created MAC_APP_DIRECT profile: ${profile.name} (${profile.uuid})`);
+            resolvedEntitlementsPath = await embedProvisioningProfileAndExtractEntitlements(appPath, profile, tmpDir);
+            console.log("  Embedded provisioning profile and extracted signing entitlements");
+        }
         await signApp(appPath, signingIdentity, resolvedEntitlementsPath);
         await (0, helpers_1.exec)(`codesign --verify --deep --strict --verbose=2 ${shellQuote(appPath)}`);
         console.log("  App signed and verified");
@@ -26726,6 +26817,33 @@ async function signApp(appPath, signingIdentity, entitlementsPath) {
         shellQuote(appPath),
     ].join(" "));
 }
+async function readBundleIdentifier(appPath) {
+    const infoPlistPath = path.join(appPath, "Contents", "Info.plist");
+    if (!fs.existsSync(infoPlistPath)) {
+        throw new Error(`Info.plist not found in macOS app bundle: ${infoPlistPath}`);
+    }
+    const bundleIdentifier = (await (0, helpers_1.execAndCapture)(`/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ${shellQuote(infoPlistPath)}`)).trim();
+    if (!bundleIdentifier) {
+        throw new Error(`CFBundleIdentifier not found in ${infoPlistPath}`);
+    }
+    return bundleIdentifier;
+}
+async function embedProvisioningProfileAndExtractEntitlements(appPath, profile, tmpDir) {
+    const profilePath = path.join(tmpDir, `${profile.uuid}.provisionprofile`);
+    const decodedProfilePath = path.join(tmpDir, `${profile.uuid}.plist`);
+    const entitlementsPath = path.join(tmpDir, `${profile.uuid}.entitlements`);
+    const embeddedProfilePath = path.join(appPath, "Contents", "embedded.provisionprofile");
+    fs.writeFileSync(profilePath, Buffer.from(profile.profileContent, "base64"));
+    fs.copyFileSync(profilePath, embeddedProfilePath);
+    await (0, helpers_1.exec)(`security cms -D -i ${shellQuote(profilePath)} > ${shellQuote(decodedProfilePath)}`, { silent: true });
+    await (0, helpers_1.exec)(`plutil -extract Entitlements xml1 -o ${shellQuote(entitlementsPath)} ${shellQuote(decodedProfilePath)}`, { silent: true });
+    const entitlements = fs.readFileSync(entitlementsPath, "utf8");
+    if (!entitlements.includes("keychain-access-groups")) {
+        throw new Error("MAC_APP_DIRECT provisioning profile does not include Keychain Sharing. " +
+            "Enable Keychain Sharing for this macOS Bundle ID in Apple Developer, then rerun the build.");
+    }
+    return entitlementsPath;
+}
 async function createZip(appPath, zipPath) {
     fs.rmSync(zipPath, { force: true });
     await (0, helpers_1.exec)(`ditto -c -k --keepParent ${shellQuote(appPath)} ${shellQuote(zipPath)}`);
@@ -26733,6 +26851,13 @@ async function createZip(appPath, zipPath) {
 function sanitizeArtifactName(value) {
     const sanitized = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
     return sanitized || "macos-app";
+}
+function parseBooleanInput(value, inputName) {
+    if (value === "true")
+        return true;
+    if (value === "false" || value === "")
+        return false;
+    throw new Error(`${inputName} must be "true" or "false", got: ${value}`);
 }
 function shellQuote(value) {
     return `'${value.replace(/'/g, "'\\''")}'`;

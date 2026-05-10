@@ -2,7 +2,13 @@ import * as core from "@actions/core";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { generateAscJwt, getOrCreateCertificate } from "./asc";
+import {
+  createProvisioningProfile,
+  findDeveloperIdCertificateIdForP12,
+  generateAscJwt,
+  getOrCreateCertificate,
+  type ProfileResult,
+} from "./asc";
 import { exec, execAndCapture } from "./helpers";
 
 const KEYCHAIN_NAME = "openci-macos-build.keychain";
@@ -23,9 +29,14 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
   const artifactNameInput = core.getInput("artifact-name") || "";
   const outputDirectory = core.getInput("output-directory") || "build/openci-artifacts";
   const buildNumberInput = core.getInput("build-number") || "";
+  const useProvisioningProfile = parseBooleanInput(
+    core.getInput("macos-provisioning-profile") || "false",
+    "macos-provisioning-profile"
+  );
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openci-macos-"));
   const apiKeyDest = path.join(os.homedir(), "private_keys", `AuthKey_${ascKeyId}.p8`);
+  let developerIdCertificateId = "";
 
   try {
     console.log("OpenCI macOS Build, Sign & Notarize");
@@ -47,6 +58,15 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
         throw new Error("developer-id-certificate-password is required when developer-id-certificate-p12 is provided");
       }
       await importCertificate(developerIdCertificateP12, developerIdCertificatePassword, tmpDir);
+      if (useProvisioningProfile) {
+        developerIdCertificateId = await findDeveloperIdCertificateIdForP12(
+          jwt,
+          developerIdCertificateP12,
+          developerIdCertificatePassword,
+          tmpDir
+        );
+        console.log(`  Matched Developer ID Application certificate in ASC: ${developerIdCertificateId}`);
+      }
       console.log("  Imported provided Developer ID Application certificate");
     } else {
       if (!certPrivateKey) {
@@ -55,6 +75,7 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
       const certKeyPath = path.join(tmpDir, "cert_key.pem");
       fs.writeFileSync(certKeyPath, certPrivateKey);
       const cert = await getOrCreateCertificate(jwt, certKeyPath, tmpDir, "DEVELOPER_ID_APPLICATION");
+      developerIdCertificateId = cert.certificateId;
       await importCertificate(cert.p12Base64, cert.password, tmpDir);
       console.log(`  Created or reused Developer ID Application certificate: ${cert.certificateId}`);
     }
@@ -76,7 +97,23 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
     core.endGroup();
 
     core.startGroup("Step 4: Code signing app");
-    const resolvedEntitlementsPath = path.resolve(workingDirectory, entitlementsPath);
+    let resolvedEntitlementsPath = path.resolve(workingDirectory, entitlementsPath);
+    if (useProvisioningProfile) {
+      if (!developerIdCertificateId) {
+        throw new Error("Developer ID Application certificate ID is required to create a MAC_APP_DIRECT provisioning profile");
+      }
+      const bundleIdentifier = await readBundleIdentifier(appPath);
+      console.log(`  Bundle ID: ${bundleIdentifier}`);
+      const profile = await createProvisioningProfile(
+        jwt,
+        developerIdCertificateId,
+        bundleIdentifier,
+        "MAC_APP_DIRECT"
+      );
+      console.log(`  Created MAC_APP_DIRECT profile: ${profile.name} (${profile.uuid})`);
+      resolvedEntitlementsPath = await embedProvisioningProfileAndExtractEntitlements(appPath, profile, tmpDir);
+      console.log("  Embedded provisioning profile and extracted signing entitlements");
+    }
     await signApp(appPath, signingIdentity, resolvedEntitlementsPath);
     await exec(`codesign --verify --deep --strict --verbose=2 ${shellQuote(appPath)}`);
     console.log("  App signed and verified");
@@ -297,6 +334,55 @@ async function signApp(
   );
 }
 
+async function readBundleIdentifier(appPath: string): Promise<string> {
+  const infoPlistPath = path.join(appPath, "Contents", "Info.plist");
+  if (!fs.existsSync(infoPlistPath)) {
+    throw new Error(`Info.plist not found in macOS app bundle: ${infoPlistPath}`);
+  }
+  const bundleIdentifier = (
+    await execAndCapture(
+      `/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ${shellQuote(infoPlistPath)}`
+    )
+  ).trim();
+  if (!bundleIdentifier) {
+    throw new Error(`CFBundleIdentifier not found in ${infoPlistPath}`);
+  }
+  return bundleIdentifier;
+}
+
+async function embedProvisioningProfileAndExtractEntitlements(
+  appPath: string,
+  profile: ProfileResult,
+  tmpDir: string
+): Promise<string> {
+  const profilePath = path.join(tmpDir, `${profile.uuid}.provisionprofile`);
+  const decodedProfilePath = path.join(tmpDir, `${profile.uuid}.plist`);
+  const entitlementsPath = path.join(tmpDir, `${profile.uuid}.entitlements`);
+  const embeddedProfilePath = path.join(appPath, "Contents", "embedded.provisionprofile");
+
+  fs.writeFileSync(profilePath, Buffer.from(profile.profileContent, "base64"));
+  fs.copyFileSync(profilePath, embeddedProfilePath);
+
+  await exec(
+    `security cms -D -i ${shellQuote(profilePath)} > ${shellQuote(decodedProfilePath)}`,
+    { silent: true }
+  );
+  await exec(
+    `plutil -extract Entitlements xml1 -o ${shellQuote(entitlementsPath)} ${shellQuote(decodedProfilePath)}`,
+    { silent: true }
+  );
+
+  const entitlements = fs.readFileSync(entitlementsPath, "utf8");
+  if (!entitlements.includes("keychain-access-groups")) {
+    throw new Error(
+      "MAC_APP_DIRECT provisioning profile does not include Keychain Sharing. " +
+      "Enable Keychain Sharing for this macOS Bundle ID in Apple Developer, then rerun the build."
+    );
+  }
+
+  return entitlementsPath;
+}
+
 async function createZip(appPath: string, zipPath: string): Promise<void> {
   fs.rmSync(zipPath, { force: true });
   await exec(
@@ -307,6 +393,12 @@ async function createZip(appPath: string, zipPath: string): Promise<void> {
 function sanitizeArtifactName(value: string): string {
   const sanitized = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   return sanitized || "macos-app";
+}
+
+function parseBooleanInput(value: string, inputName: string): boolean {
+  if (value === "true") return true;
+  if (value === "false" || value === "") return false;
+  throw new Error(`${inputName} must be "true" or "false", got: ${value}`);
 }
 
 function shellQuote(value: string): string {

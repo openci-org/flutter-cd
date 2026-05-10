@@ -68,6 +68,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
     asc-private-key: ${{ secrets.ASC_PRIVATE_KEY }}
     developer-id-certificate-p12: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
     developer-id-certificate-password: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+    macos-provisioning-profile: "true"
     build-args: "--dart-define=SENTRY_DSN=${{ secrets.SENTRY_DSN }}"
     artifact-name: "OpenCI-dashboard-macos"
 ```
@@ -93,6 +94,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 | `upload-to-app-store-connect` | Upload the generated iOS IPA to App Store Connect; defaults to true for `app-store` and false for `ad-hoc` | No | `""` |
 | `macos-app-path` | Path to the built `.app`, relative to `working-directory`; auto-detected when omitted (macos) | No | `""` |
 | `macos-entitlements-path` | Path to the macOS entitlements plist, relative to `working-directory` (macos) | No | `macos/Runner/Release.entitlements` |
+| `macos-provisioning-profile` | Create and embed a `MAC_APP_DIRECT` provisioning profile and sign with profile-derived entitlements. Use this for Developer ID apps that need capabilities such as Keychain Sharing (macos) | No | `"false"` |
 | `artifact-name` | Base name for the packaged artifact zip (macos) | No | `.app` name + `-macos` |
 | `output-directory` | Directory for packaged artifacts, relative to `working-directory` (macos) | No | `build/openci-artifacts` |
 
@@ -126,9 +128,10 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 1. Imports a provided Developer ID Application `.p12`, or creates/reuses one via App Store Connect when only `certificate-private-key` is provided
 2. Imports the certificate into a temporary keychain
 3. Runs `flutter build macos --release`
-4. Signs the built `.app` with hardened runtime enabled
-5. Packages the `.app` with `ditto`, submits it to Apple's notary service, and staples the ticket
-6. Writes the final notarized zip to `output-directory` and exposes `artifact-path`
+4. When `macos-provisioning-profile` is `true`, creates a `MAC_APP_DIRECT` provisioning profile, embeds it into the `.app`, and signs with the profile's entitlements
+5. Signs the built `.app` with hardened runtime enabled
+6. Packages the `.app` with `ditto`, submits it to Apple's notary service, and staples the ticket
+7. Writes the final notarized zip to `output-directory` and exposes `artifact-path`
 
 ## License
 
