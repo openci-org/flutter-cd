@@ -26599,7 +26599,15 @@ async function buildSignAndNotarizeMacos() {
         core.startGroup("Step 2: Setting up temporary keychain");
         await setupKeychain();
         await installDeveloperIdCertificateAuthority(tmpDir);
-        if (developerIdCertificateP12) {
+        if (useProvisioningProfile && certPrivateKey) {
+            const certKeyPath = path.join(tmpDir, "cert_key.pem");
+            fs.writeFileSync(certKeyPath, certPrivateKey);
+            const cert = await (0, asc_1.getOrCreateCertificate)(jwt, certKeyPath, tmpDir, "DEVELOPER_ID_APPLICATION");
+            developerIdCertificateId = cert.certificateId;
+            await importCertificate(cert.p12Base64, cert.password, tmpDir);
+            console.log(`  Created or reused ASC Developer ID Application certificate for MAC_APP_DIRECT profile: ${cert.certificateId}`);
+        }
+        else if (developerIdCertificateP12) {
             if (!developerIdCertificatePassword) {
                 throw new Error("developer-id-certificate-password is required when developer-id-certificate-p12 is provided");
             }
