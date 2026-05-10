@@ -25996,29 +25996,46 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, p
 async function findDeveloperIdCertificateIdForP12(jwt, p12Base64, password, tmpDir) {
     const p12Path = `${tmpDir}/developer-id-match.p12`;
     const certPemPath = `${tmpDir}/developer-id-match.pem`;
-    const certDerPath = `${tmpDir}/developer-id-match.der`;
     fs.writeFileSync(p12Path, Buffer.from(p12Base64, "base64"));
     try {
         await extractCertificateFromP12(p12Path, certPemPath, password);
-        await (0, helpers_1.exec)(`openssl x509 -in ${shellQuote(certPemPath)} -outform DER -out ${shellQuote(certDerPath)}`, { silent: true });
-        const localCertContent = normalizeBase64(await (0, helpers_1.execAndCapture)(`base64 -i ${shellQuote(certDerPath)}`));
+        const localFingerprint = await certificateFingerprint(certPemPath);
         const existingCerts = await ascApi(jwt, "/certificates?filter[certificateType]=DEVELOPER_ID_APPLICATION&limit=200");
         const certs = existingCerts?.data ?? [];
+        const candidateSummaries = [];
         for (const cert of certs) {
-            const certificateContent = normalizeBase64(cert.attributes?.certificateContent ?? "");
-            if (certificateContent === localCertContent) {
+            const certContent = cert.attributes?.certificateContent ?? "";
+            if (!certContent)
+                continue;
+            const ascCertPemPath = `${tmpDir}/developer-id-${cert.id}.pem`;
+            fs.writeFileSync(ascCertPemPath, decodeCertificateContent(certContent));
+            const ascFingerprint = await certificateFingerprint(ascCertPemPath);
+            fs.rmSync(ascCertPemPath, { force: true });
+            candidateSummaries.push(`${cert.id}:${ascFingerprint}`);
+            if (ascFingerprint === localFingerprint) {
                 return cert.id;
             }
         }
         throw new Error("Provided Developer ID .p12 certificate was not found in App Store Connect. " +
-            "Use a Developer ID Application certificate from the same Apple Developer account, " +
-            "or let the action create/reuse one from certificate-private-key.");
+            `Local fingerprint: ${localFingerprint}. ` +
+            `ASC candidates: ${candidateSummaries.join(", ") || "(none)"}. ` +
+            "Use a Developer ID Application certificate from the same Apple Developer account.");
     }
     finally {
         fs.rmSync(p12Path, { force: true });
         fs.rmSync(certPemPath, { force: true });
-        fs.rmSync(certDerPath, { force: true });
     }
+}
+function decodeCertificateContent(certificateContent) {
+    const trimmed = certificateContent.trim();
+    if (trimmed.includes("BEGIN CERTIFICATE")) {
+        return Buffer.from(trimmed);
+    }
+    return Buffer.from(normalizeBase64(trimmed), "base64");
+}
+async function certificateFingerprint(certPath) {
+    const output = await (0, helpers_1.execAndCapture)(`openssl x509 -in ${shellQuote(certPath)} -noout -fingerprint -sha256`);
+    return output.trim().replace(/^sha256 Fingerprint=/i, "").replace(/:/g, "").toUpperCase();
 }
 async function extractCertificateFromP12(p12Path, certPemPath, password) {
     const command = [
@@ -26599,15 +26616,7 @@ async function buildSignAndNotarizeMacos() {
         core.startGroup("Step 2: Setting up temporary keychain");
         await setupKeychain();
         await installDeveloperIdCertificateAuthority(tmpDir);
-        if (useProvisioningProfile && certPrivateKey) {
-            const certKeyPath = path.join(tmpDir, "cert_key.pem");
-            fs.writeFileSync(certKeyPath, certPrivateKey);
-            const cert = await (0, asc_1.getOrCreateCertificate)(jwt, certKeyPath, tmpDir, "DEVELOPER_ID_APPLICATION");
-            developerIdCertificateId = cert.certificateId;
-            await importCertificate(cert.p12Base64, cert.password, tmpDir);
-            console.log(`  Created or reused ASC Developer ID Application certificate for MAC_APP_DIRECT profile: ${cert.certificateId}`);
-        }
-        else if (developerIdCertificateP12) {
+        if (developerIdCertificateP12) {
             if (!developerIdCertificatePassword) {
                 throw new Error("developer-id-certificate-password is required when developer-id-certificate-p12 is provided");
             }
