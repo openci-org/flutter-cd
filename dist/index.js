@@ -25803,6 +25803,34 @@ async function preflightCheck(jwt, bundleId, version, buildNumber) {
     }
     console.log(`  ✅ Version ${version}+${buildNumber} is available for upload`);
 }
+const DEVELOPER_ID_APPLICATION_CERTIFICATE_TYPES = new Set([
+    "DEVELOPER_ID_APPLICATION",
+    "DEVELOPER_ID_APPLICATION_G2",
+]);
+async function listCertificates(jwt, certificateType) {
+    if (certificateType === "DEVELOPER_ID_APPLICATION") {
+        const response = await ascApi(jwt, "/certificates?limit=200");
+        return sortCertificatesByNewest((response?.data ?? []).filter((cert) => DEVELOPER_ID_APPLICATION_CERTIFICATE_TYPES.has(cert.attributes?.certificateType)));
+    }
+    const response = await ascApi(jwt, `/certificates?filter[certificateType]=${certificateType}&limit=200`);
+    return sortCertificatesByNewest(response?.data ?? []);
+}
+function sortCertificatesByNewest(certs) {
+    return [...certs].sort((a, b) => certificateExpirationMs(b) - certificateExpirationMs(a));
+}
+function certificateExpirationMs(cert) {
+    const expirationDate = cert.attributes?.expirationDate;
+    if (typeof expirationDate !== "string") {
+        return 0;
+    }
+    const time = new Date(expirationDate).getTime();
+    return Number.isFinite(time) ? time : 0;
+}
+function certificateCandidateSummary(cert, fingerprint) {
+    const expirationDate = cert.attributes?.expirationDate ?? "unknown-expiration";
+    const displayName = cert.attributes?.displayName ?? cert.attributes?.name ?? "unnamed";
+    return `${cert.id}:${fingerprint}:expires=${expirationDate}:name=${displayName}`;
+}
 /**
  * Try to find an existing valid signing certificate of the requested type.
  * If found, download and create a p12 with the provided private key.
@@ -25810,8 +25838,7 @@ async function preflightCheck(jwt, bundleId, version, buildNumber) {
  */
 async function getOrCreateCertificate(jwt, certPrivateKeyPath, tmpDir, certificateType = "DISTRIBUTION") {
     const password = "openci";
-    const existingCerts = await ascApi(jwt, `/certificates?filter[certificateType]=${certificateType}`);
-    const certs = existingCerts?.data ?? [];
+    const certs = await listCertificates(jwt, certificateType);
     const validCerts = certs.filter((cert) => {
         const expDate = new Date(cert.attributes.expirationDate);
         return expDate > new Date();
@@ -25857,8 +25884,7 @@ async function createNewCertificate(jwt, certPrivateKeyPath, tmpDir, password, c
         const msg = String(e);
         if (msg.includes("409") || msg.includes("CONFLICT")) {
             console.log("  ⚠️  Certificate limit reached, deleting oldest...");
-            const existing = await ascApi(jwt, `/certificates?filter[certificateType]=${certificateType}`);
-            const allCerts = existing?.data ?? [];
+            const allCerts = await listCertificates(jwt, certificateType);
             if (allCerts.length > 0) {
                 const oldest = allCerts[allCerts.length - 1];
                 console.log(`  🗑️  Deleting: ${oldest.id}`);
@@ -26000,8 +26026,7 @@ async function findDeveloperIdCertificateIdForP12(jwt, p12Base64, password, tmpD
     try {
         await extractCertificateFromP12(p12Path, certPemPath, password);
         const localFingerprint = await certificateFingerprint(certPemPath);
-        const existingCerts = await ascApi(jwt, "/certificates?filter[certificateType]=DEVELOPER_ID_APPLICATION&limit=200");
-        const certs = existingCerts?.data ?? [];
+        const certs = await listCertificates(jwt, "DEVELOPER_ID_APPLICATION");
         const candidateSummaries = [];
         for (const cert of certs) {
             const certContent = cert.attributes?.certificateContent ?? "";
@@ -26011,7 +26036,7 @@ async function findDeveloperIdCertificateIdForP12(jwt, p12Base64, password, tmpD
             fs.writeFileSync(ascCertPemPath, decodeCertificateContent(certContent));
             const ascFingerprint = await certificateFingerprint(ascCertPemPath);
             fs.rmSync(ascCertPemPath, { force: true });
-            candidateSummaries.push(`${cert.id}:${ascFingerprint}`);
+            candidateSummaries.push(certificateCandidateSummary(cert, ascFingerprint));
             if (ascFingerprint === localFingerprint) {
                 return cert.id;
             }
