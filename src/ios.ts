@@ -20,6 +20,13 @@ import {
 
 const KEYCHAIN_NAME = "openci-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
+const APPLE_WWDR_CERTIFICATE_URLS = [
+  "https://www.apple.com/certificateauthority/AppleWWDRCAG2.cer",
+  "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer",
+  "https://www.apple.com/certificateauthority/AppleWWDRCAG4.cer",
+  "https://www.apple.com/certificateauthority/AppleWWDRCAG5.cer",
+  "https://www.apple.com/certificateauthority/AppleWWDRCAG6.cer",
+];
 type IosDistributionMethod = "app-store" | "ad-hoc";
 
 function parseDistributionMethod(value: string): IosDistributionMethod {
@@ -133,6 +140,7 @@ export async function buildAndSignIos(): Promise<void> {
 
     // ── Step 7: Import certificate ──────────────────────────
     core.startGroup("Step 7: Importing certificate");
+    await importAppleWwdrCertificates(tmpDir);
     await importCertificate(cert.p12Base64, cert.password, tmpDir);
     console.log("  ✅ Certificate imported");
     core.endGroup();
@@ -144,10 +152,7 @@ export async function buildAndSignIos(): Promise<void> {
     } else {
       console.log("  Skipping Flutter iOS Distribution signing patch");
     }
-    console.log("  Code signing identities:");
-    await exec("security find-identity -p codesigning -v").catch(() => {
-      console.log("  Unable to list code signing identities");
-    });
+    await assertAppleDistributionIdentityAvailable();
     core.endGroup();
 
     // ── Step 9: Install provisioning profile ────────────────
@@ -236,11 +241,33 @@ export async function buildAndSignIos(): Promise<void> {
 // ══════════════════════════════════════════════════════════════
 
 async function setupKeychain(): Promise<void> {
-  await exec(`security delete-keychain "${KEYCHAIN_NAME}"`, { silent: true }).catch(() => {});
-  await exec(`security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_NAME}"`);
-  await exec(`security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_NAME}"`);
-  await exec(`security set-keychain-settings -t 3600 -u "${KEYCHAIN_NAME}"`);
-  await exec(`security list-keychains -d user -s "${KEYCHAIN_NAME}" login.keychain-db`);
+  await exec(`security delete-keychain ${shellQuote(KEYCHAIN_NAME)}`, { silent: true }).catch(() => {});
+  await exec(`security create-keychain -p ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(KEYCHAIN_NAME)}`);
+  await exec(`security unlock-keychain -p ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(KEYCHAIN_NAME)}`);
+  await exec(`security set-keychain-settings -t 3600 -u ${shellQuote(KEYCHAIN_NAME)}`);
+  await exec(`security list-keychains -d user -s ${shellQuote(keychainPath())} login.keychain-db`);
+  await exec(`security default-keychain -s ${shellQuote(keychainPath())}`);
+}
+
+async function importAppleWwdrCertificates(tmpDir: string): Promise<void> {
+  const certDir = path.join(tmpDir, "apple-wwdr");
+  fs.mkdirSync(certDir, { recursive: true });
+
+  for (const url of APPLE_WWDR_CERTIFICATE_URLS) {
+    const fileName = path.basename(url);
+    const certPath = path.join(certDir, fileName);
+    await exec(
+      `curl --fail --silent --show-error --location --retry 3 -o ${shellQuote(certPath)} ${shellQuote(url)}`,
+      { silent: true }
+    );
+    await exec(`security import ${shellQuote(certPath)} -k ${shellQuote(keychainPath())}`, {
+      silent: true,
+    }).catch(() => {
+      console.log(`  Apple WWDR certificate already present or skipped: ${fileName}`);
+    });
+  }
+
+  console.log("  ✅ Apple WWDR intermediate certificates installed");
 }
 
 async function importCertificate(
@@ -251,12 +278,58 @@ async function importCertificate(
   const p12Path = path.join(tmpDir, "import.p12");
   fs.writeFileSync(p12Path, Buffer.from(p12Base64, "base64"));
   await exec(
-    `security import "${p12Path}" -k "${KEYCHAIN_NAME}" -P "${password}" -T /usr/bin/codesign -T /usr/bin/security`
+    `security import ${shellQuote(p12Path)} -k ${shellQuote(keychainPath())} -P ${shellQuote(password)} -T /usr/bin/codesign -T /usr/bin/security`
   );
   await exec(
-    `security set-key-partition-list -S "apple-tool:,apple:,codesign:" -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_NAME}"`
+    `security set-key-partition-list -S "apple-tool:,apple:,codesign:" -k ${shellQuote(KEYCHAIN_PASSWORD)} ${shellQuote(keychainPath())}`
   );
   fs.rmSync(p12Path, { force: true });
+}
+
+async function assertAppleDistributionIdentityAvailable(): Promise<void> {
+  const outputs = await logCodeSigningIdentities();
+  if (outputs.some((output) => output.includes("Apple Distribution"))) {
+    return;
+  }
+
+  throw new Error(
+    "Apple Distribution identity was imported but is not available as a valid code signing identity. " +
+      `find-identity output: ${outputs.join("\n").trim() || "(empty)"}`
+  );
+}
+
+async function logCodeSigningIdentities(): Promise<string[]> {
+  const commands = [
+    `security find-identity -p codesigning -v ${shellQuote(keychainPath())}`,
+    `security find-identity -p codesigning -v ${shellQuote(KEYCHAIN_NAME)}`,
+    "security find-identity -p codesigning -v",
+  ];
+  const outputs: string[] = [];
+
+  console.log("  Code signing identities:");
+  for (const command of commands) {
+    const output = await execAndCapture(command).catch((error) => `Unable to run ${command}: ${error}`);
+    outputs.push(output);
+    console.log(`  $ ${command}`);
+    console.log(indentOutput(output.trim() || "(empty)"));
+  }
+
+  return outputs;
+}
+
+function keychainPath(): string {
+  return path.join(os.homedir(), "Library", "Keychains", `${KEYCHAIN_NAME}-db`);
+}
+
+function indentOutput(output: string): string {
+  return output
+    .split("\n")
+    .map((line) => `    ${line}`)
+    .join("\n");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 async function cleanupKeychain(): Promise<void> {
