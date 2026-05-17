@@ -84,6 +84,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 | `working-directory` | Flutter project directory | No | `.` |
 | `build-args` | Additional arguments for `flutter build` | No | `""` |
 | `swift-package-manager` | Flutter Swift Package Manager mode for Apple builds: `inherit`, `enabled`, or `disabled`. `inherit` leaves the current Flutter setting unchanged. `auto`, `true`, and `false` are accepted as aliases. (ios, macos) | No | `"inherit"` |
+| `patch-flutter-ios-distribution-signing` | Patch Flutter issue `#176636` so iOS builds can use Apple Distribution certificates when Flutter falls back to identity discovery (ios) | No | `"true"` |
 | `firebase-service-account` | GCP service account JSON for Firebase deploy (web) | No | `""` |
 | `preview` | Deploy to Firebase Hosting preview channel (web) | No | `"false"` |
 | `certificate-private-key` | RSA private key PEM used to create/reuse signing certificates (ios, macos) | No | `""` |
@@ -119,14 +120,13 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
    - **Certificate**: Creates a Distribution certificate via ASC API (CSR → certificate), or validates and reuses an existing one
    - **Provisioning Profile**: Creates an App Store provisioning profile via ASC API
    - **Keychain**: Sets up a temporary keychain and imports the certificate
-   - **Xcode Config**: Modifies `project.pbxproj` for manual signing with `sed`
-   - **Archive**: Builds with `xcodebuild archive`
-   - **Export**: Exports IPA with `xcodebuild -exportArchive`
+   - **Flutter Tool Patch**: Applies a temporary Flutter issue `#176636` workaround unless `patch-flutter-ios-distribution-signing` is `false`
+   - **Xcode Config**: Modifies `project.pbxproj` for manual signing
 2. Optionally sets Flutter's Swift Package Manager mode when `swift-package-manager` is `enabled` or `disabled`, then runs `flutter pub get`
 3. Runs `flutter build ipa` and exports the IPA
 4. Exposes the generated IPA via `ipa-path` and `artifact-directory` outputs
-4. Uploads to App Store Connect by default for `app-store` distribution
-5. Cleans up temporary keychain and credentials
+5. Uploads to App Store Connect by default for `app-store` distribution
+6. Cleans up temporary keychain and credentials
 
 ### macOS (`platform: macos`)
 

@@ -26092,15 +26092,54 @@ function shellQuote(value) {
 /***/ }),
 
 /***/ 6693:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSwiftPackageManagerMode = parseSwiftPackageManagerMode;
 exports.configureSwiftPackageManager = configureSwiftPackageManager;
+exports.patchFlutterIosDistributionSigning = patchFlutterIosDistributionSigning;
 exports.buildNoPubArg = buildNoPubArg;
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
 const helpers_1 = __nccwpck_require__(1302);
+const flutterIosSigningPattern = String.raw `r'^\s*\d+\).+"(.+Develop(ment|er).+)"$'`;
+const patchedFlutterIosSigningPattern = String.raw `r'^\s*\d+\).+"(.+(Develop(ment|er)|Distribution).+)"$'`;
+const iosSigningPatternDeclaration = /final _securityFindIdentityDeveloperIdentityExtractionPattern = RegExp\(\s*([\s\S]*?)\s*\);/;
 function parseSwiftPackageManagerMode(value) {
     const normalized = value.trim().toLowerCase();
     if (normalized === "" || normalized === "inherit" || normalized === "auto") {
@@ -26127,11 +26166,56 @@ async function configureSwiftPackageManager(mode, workingDirectory) {
     await (0, helpers_1.exec)("flutter pub get", { cwd: workingDirectory });
     return true;
 }
+async function patchFlutterIosDistributionSigning() {
+    const flutterRoot = await detectFlutterRoot();
+    const codeSigningPath = path.join(flutterRoot, "packages/flutter_tools/lib/src/ios/code_signing.dart");
+    if (!fs.existsSync(codeSigningPath)) {
+        throw new Error(`Flutter iOS code signing source not found at ${codeSigningPath}`);
+    }
+    const content = fs.readFileSync(codeSigningPath, "utf8");
+    const patternDeclaration = content.match(iosSigningPatternDeclaration);
+    if (patternDeclaration?.[0].includes("Distribution")) {
+        console.log("  Flutter iOS signing regex already accepts Apple Distribution certificates");
+        return false;
+    }
+    if (!content.includes(flutterIosSigningPattern)) {
+        console.log("  Flutter iOS signing regex did not match the known issue #176636 pattern; leaving Flutter unchanged");
+        return false;
+    }
+    fs.writeFileSync(codeSigningPath, content.replace(flutterIosSigningPattern, patchedFlutterIosSigningPattern));
+    removeFlutterToolCache(flutterRoot);
+    console.log("  Patched Flutter iOS signing regex for Apple Distribution certificates");
+    return true;
+}
 function buildNoPubArg(pubGetAlreadyRan, buildArgs) {
     if (!pubGetAlreadyRan || buildArgs.includes("--no-pub")) {
         return "";
     }
     return "--no-pub";
+}
+async function detectFlutterRoot() {
+    try {
+        const versionOutput = await (0, helpers_1.execAndCapture)("flutter --version --machine");
+        const versionInfo = JSON.parse(versionOutput);
+        if (typeof versionInfo.flutterRoot === "string" && versionInfo.flutterRoot.trim() !== "") {
+            return versionInfo.flutterRoot;
+        }
+    }
+    catch (error) {
+        console.log(`  Unable to read flutterRoot from flutter --version --machine: ${error}`);
+    }
+    const flutterPath = (await (0, helpers_1.execAndCapture)("command -v flutter")).trim();
+    if (flutterPath === "") {
+        throw new Error("Unable to locate Flutter SDK because flutter is not on PATH");
+    }
+    return path.dirname(path.dirname(fs.realpathSync(flutterPath)));
+}
+function removeFlutterToolCache(flutterRoot) {
+    for (const relativePath of ["bin/cache/flutter_tools.snapshot", "bin/cache/flutter_tools.stamp"]) {
+        const cachePath = path.join(flutterRoot, relativePath);
+        fs.rmSync(cachePath, { force: true });
+        console.log(`  Removed ${relativePath}`);
+    }
 }
 
 
@@ -26331,10 +26415,24 @@ function parseDistributionMethod(value) {
     }
     throw new Error(`Unsupported iOS distribution-method: ${value}. Use "app-store" or "ad-hoc".`);
 }
+function parseBooleanInput(inputName, value, defaultValue) {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "") {
+        return defaultValue;
+    }
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+        return true;
+    }
+    if (["false", "0", "no", "off"].includes(normalized)) {
+        return false;
+    }
+    throw new Error(`Unsupported ${inputName}: ${value}. Use "true" or "false".`);
+}
 async function buildAndSignIos() {
     const workingDirectory = core.getInput("working-directory") || ".";
     const buildArgs = core.getInput("build-args") || "";
     const swiftPackageManagerMode = (0, flutter_1.parseSwiftPackageManagerMode)(core.getInput("swift-package-manager") || "inherit");
+    const patchFlutterDistributionSigning = parseBooleanInput("patch-flutter-ios-distribution-signing", core.getInput("patch-flutter-ios-distribution-signing") || "", true);
     const scheme = core.getInput("scheme") || "Runner";
     const certPrivateKey = core.getInput("certificate-private-key", { required: true }).replace(/\\n/g, "\n");
     const ascKeyId = core.getInput("asc-key-id", { required: true });
@@ -26353,6 +26451,7 @@ async function buildAndSignIos() {
         console.log(`   Scheme: ${scheme}`);
         console.log(`   Distribution: ${distributionMethod}`);
         console.log(`   Swift Package Manager: ${swiftPackageManagerMode}`);
+        console.log(`   Patch Flutter iOS Distribution signing: ${patchFlutterDistributionSigning ? "enabled" : "disabled"}`);
         console.log("");
         // ── Step 1: Configure Flutter dependency manager ────────
         core.startGroup("Step 1: Configuring Flutter dependency manager");
@@ -26405,24 +26504,37 @@ async function buildAndSignIos() {
         await importCertificate(cert.p12Base64, cert.password, tmpDir);
         console.log("  ✅ Certificate imported");
         core.endGroup();
-        // ── Step 8: Install provisioning profile ────────────────
-        core.startGroup("Step 8: Installing provisioning profile");
+        // ── Step 8: Patch Flutter iOS signing fallback ──────────
+        core.startGroup("Step 8: Patching Flutter iOS distribution signing");
+        if (patchFlutterDistributionSigning) {
+            await (0, flutter_1.patchFlutterIosDistributionSigning)();
+        }
+        else {
+            console.log("  Skipping Flutter iOS Distribution signing patch");
+        }
+        console.log("  Code signing identities:");
+        await (0, helpers_1.exec)("security find-identity -p codesigning -v").catch(() => {
+            console.log("  Unable to list code signing identities");
+        });
+        core.endGroup();
+        // ── Step 9: Install provisioning profile ────────────────
+        core.startGroup("Step 9: Installing provisioning profile");
         await installProvisioningProfile(profile, bundleId);
         console.log(`  ✅ Profile installed (UUID: ${profile.uuid})`);
         core.endGroup();
-        // ── Step 9: Edit xcodeproj ──────────────────────────────
-        core.startGroup("Step 9: Configuring Xcode project for manual signing");
+        // ── Step 10: Edit xcodeproj ─────────────────────────────
+        core.startGroup("Step 10: Configuring Xcode project for manual signing");
         editXcodeProject(workingDirectory, bundleId, appleTeamId, profile);
         console.log("  ✅ Xcode project updated for manual signing");
         core.endGroup();
-        // ── Step 10: Generate ExportOptions.plist ───────────────
-        core.startGroup("Step 10: Generating ExportOptions.plist");
+        // ── Step 11: Generate ExportOptions.plist ───────────────
+        core.startGroup("Step 11: Generating ExportOptions.plist");
         const exportOptionsPath = path.resolve(workingDirectory, "ExportOptions.plist");
         generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.name, distributionMethod);
         console.log("  ✅ ExportOptions.plist generated");
         core.endGroup();
-        // ── Step 11: Flutter build IPA ──────────────────────────
-        core.startGroup("Step 11: Building IPA");
+        // ── Step 12: Flutter build IPA ──────────────────────────
+        core.startGroup("Step 12: Building IPA");
         console.log("  ⏳ This may take several minutes...");
         const buildNumberArg = buildNumberInput ? `--build-number=${buildNumber}` : "";
         const noPubArg = (0, flutter_1.buildNoPubArg)(pubGetAlreadyRan, buildArgs);
@@ -26446,8 +26558,8 @@ async function buildAndSignIos() {
         core.setOutput("artifact-directory", path.resolve(ipaDir));
         core.setOutput("distribution-method", distributionMethod);
         if (uploadToAppStoreConnect) {
-            // ── Step 12: Upload to App Store Connect ─────────────────
-            core.startGroup("Step 12: Uploading to App Store Connect");
+            // ── Step 13: Upload to App Store Connect ─────────────────
+            core.startGroup("Step 13: Uploading to App Store Connect");
             console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
             const uploadOutput = await (0, helpers_1.execAndCapture)(`xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}" 2>&1`);
             if (uploadOutput.includes("ERROR")) {

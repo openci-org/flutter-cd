@@ -6,6 +6,7 @@ import { exec, execAndCapture } from "./helpers";
 import {
   buildNoPubArg,
   configureSwiftPackageManager,
+  patchFlutterIosDistributionSigning,
   parseSwiftPackageManagerMode,
 } from "./flutter";
 import {
@@ -28,11 +29,30 @@ function parseDistributionMethod(value: string): IosDistributionMethod {
   throw new Error(`Unsupported iOS distribution-method: ${value}. Use "app-store" or "ad-hoc".`);
 }
 
+function parseBooleanInput(inputName: string, value: string, defaultValue: boolean): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "") {
+    return defaultValue;
+  }
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Unsupported ${inputName}: ${value}. Use "true" or "false".`);
+}
+
 export async function buildAndSignIos(): Promise<void> {
   const workingDirectory = core.getInput("working-directory") || ".";
   const buildArgs = core.getInput("build-args") || "";
   const swiftPackageManagerMode = parseSwiftPackageManagerMode(
     core.getInput("swift-package-manager") || "inherit"
+  );
+  const patchFlutterDistributionSigning = parseBooleanInput(
+    "patch-flutter-ios-distribution-signing",
+    core.getInput("patch-flutter-ios-distribution-signing") || "",
+    true
   );
   const scheme = core.getInput("scheme") || "Runner";
   const certPrivateKey = core.getInput("certificate-private-key", { required: true }).replace(/\\n/g, "\n");
@@ -54,6 +74,9 @@ export async function buildAndSignIos(): Promise<void> {
     console.log(`   Scheme: ${scheme}`);
     console.log(`   Distribution: ${distributionMethod}`);
     console.log(`   Swift Package Manager: ${swiftPackageManagerMode}`);
+    console.log(
+      `   Patch Flutter iOS Distribution signing: ${patchFlutterDistributionSigning ? "enabled" : "disabled"}`
+    );
     console.log("");
 
     // ── Step 1: Configure Flutter dependency manager ────────
@@ -114,27 +137,40 @@ export async function buildAndSignIos(): Promise<void> {
     console.log("  ✅ Certificate imported");
     core.endGroup();
 
-    // ── Step 8: Install provisioning profile ────────────────
-    core.startGroup("Step 8: Installing provisioning profile");
+    // ── Step 8: Patch Flutter iOS signing fallback ──────────
+    core.startGroup("Step 8: Patching Flutter iOS distribution signing");
+    if (patchFlutterDistributionSigning) {
+      await patchFlutterIosDistributionSigning();
+    } else {
+      console.log("  Skipping Flutter iOS Distribution signing patch");
+    }
+    console.log("  Code signing identities:");
+    await exec("security find-identity -p codesigning -v").catch(() => {
+      console.log("  Unable to list code signing identities");
+    });
+    core.endGroup();
+
+    // ── Step 9: Install provisioning profile ────────────────
+    core.startGroup("Step 9: Installing provisioning profile");
     await installProvisioningProfile(profile, bundleId);
     console.log(`  ✅ Profile installed (UUID: ${profile.uuid})`);
     core.endGroup();
 
-    // ── Step 9: Edit xcodeproj ──────────────────────────────
-    core.startGroup("Step 9: Configuring Xcode project for manual signing");
+    // ── Step 10: Edit xcodeproj ─────────────────────────────
+    core.startGroup("Step 10: Configuring Xcode project for manual signing");
     editXcodeProject(workingDirectory, bundleId, appleTeamId, profile);
     console.log("  ✅ Xcode project updated for manual signing");
     core.endGroup();
 
-    // ── Step 10: Generate ExportOptions.plist ───────────────
-    core.startGroup("Step 10: Generating ExportOptions.plist");
+    // ── Step 11: Generate ExportOptions.plist ───────────────
+    core.startGroup("Step 11: Generating ExportOptions.plist");
     const exportOptionsPath = path.resolve(workingDirectory, "ExportOptions.plist");
     generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.name, distributionMethod);
     console.log("  ✅ ExportOptions.plist generated");
     core.endGroup();
 
-    // ── Step 11: Flutter build IPA ──────────────────────────
-    core.startGroup("Step 11: Building IPA");
+    // ── Step 12: Flutter build IPA ──────────────────────────
+    core.startGroup("Step 12: Building IPA");
     console.log("  ⏳ This may take several minutes...");
     const buildNumberArg = buildNumberInput ? `--build-number=${buildNumber}` : "";
     const noPubArg = buildNoPubArg(pubGetAlreadyRan, buildArgs);
@@ -165,8 +201,8 @@ export async function buildAndSignIos(): Promise<void> {
     core.setOutput("distribution-method", distributionMethod);
 
     if (uploadToAppStoreConnect) {
-      // ── Step 12: Upload to App Store Connect ─────────────────
-      core.startGroup("Step 12: Uploading to App Store Connect");
+      // ── Step 13: Upload to App Store Connect ─────────────────
+      core.startGroup("Step 13: Uploading to App Store Connect");
       console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
       const uploadOutput = await execAndCapture(
         `xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}" 2>&1`

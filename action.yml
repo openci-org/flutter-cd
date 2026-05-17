@@ -17,6 +17,10 @@ inputs:
     description: "Flutter Swift Package Manager mode for Apple builds: inherit, enabled, or disabled. inherit leaves the current Flutter setting unchanged. (ios, macos)"
     required: false
     default: "inherit"
+  patch-flutter-ios-distribution-signing:
+    description: "Patch Flutter issue #176636 so iOS builds can use Apple Distribution certificates when Flutter falls back to identity discovery. (ios)"
+    required: false
+    default: "true"
   firebase-service-account:
     description: GCP service account JSON for Firebase deploy (web)
     required: false
