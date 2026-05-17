@@ -135,7 +135,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 3. Optionally sets Flutter's Swift Package Manager mode when `swift-package-manager` is `enabled` or `disabled`, then runs `flutter pub get`
 4. Runs `flutter build macos --release`
 5. When `macos-provisioning-profile` is `true`, creates a `MAC_APP_DIRECT` provisioning profile, embeds it into the `.app`, and signs with the profile's entitlements
-6. Signs the built `.app` with hardened runtime enabled
+6. Signs nested macOS code without app entitlements, then signs the top-level `.app` with hardened runtime and the app entitlements
 7. Packages the `.app` with `ditto`, submits it to Apple's notary service, and staples the ticket
 8. Writes the final notarized zip to `output-directory` and exposes `artifact-path`
 

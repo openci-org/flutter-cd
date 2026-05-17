@@ -27076,10 +27076,22 @@ async function signApp(appPath, signingIdentity, entitlementsPath) {
     if (!fs.existsSync(entitlementsPath)) {
         throw new Error(`macOS entitlements file not found: ${entitlementsPath}`);
     }
+    console.log("  Signing nested macOS code without app entitlements");
     await (0, helpers_1.exec)([
         "codesign",
         "--force",
         "--deep",
+        "--options",
+        "runtime",
+        "--timestamp",
+        "--sign",
+        shellQuote(signingIdentity),
+        shellQuote(appPath),
+    ].join(" "));
+    console.log("  Signing macOS app bundle with app entitlements");
+    await (0, helpers_1.exec)([
+        "codesign",
+        "--force",
         "--options",
         "runtime",
         "--timestamp",
