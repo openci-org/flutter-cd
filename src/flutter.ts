@@ -76,10 +76,15 @@ export async function patchFlutterIosDistributionSigning(): Promise<boolean> {
     return false;
   }
 
-  fs.writeFileSync(
-    codeSigningPath,
-    content.replace(flutterIosSigningPattern, patchedFlutterIosSigningPattern)
+  const patchedContent = content.replace(
+    flutterIosSigningPattern,
+    () => patchedFlutterIosSigningPattern
   );
+  if (!patchedContent.includes(patchedFlutterIosSigningPattern)) {
+    throw new Error("Failed to patch Flutter iOS signing regex");
+  }
+
+  fs.writeFileSync(codeSigningPath, patchedContent);
   removeFlutterToolCache(flutterRoot);
 
   console.log("  Patched Flutter iOS signing regex for Apple Distribution certificates");

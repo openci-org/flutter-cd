@@ -26182,7 +26182,11 @@ async function patchFlutterIosDistributionSigning() {
         console.log("  Flutter iOS signing regex did not match the known issue #176636 pattern; leaving Flutter unchanged");
         return false;
     }
-    fs.writeFileSync(codeSigningPath, content.replace(flutterIosSigningPattern, patchedFlutterIosSigningPattern));
+    const patchedContent = content.replace(flutterIosSigningPattern, () => patchedFlutterIosSigningPattern);
+    if (!patchedContent.includes(patchedFlutterIosSigningPattern)) {
+        throw new Error("Failed to patch Flutter iOS signing regex");
+    }
+    fs.writeFileSync(codeSigningPath, patchedContent);
     removeFlutterToolCache(flutterRoot);
     console.log("  Patched Flutter iOS signing regex for Apple Distribution certificates");
     return true;
