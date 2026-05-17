@@ -13,6 +13,10 @@ inputs:
     description: Additional arguments for flutter build
     required: false
     default: ""
+  swift-package-manager:
+    description: "Flutter Swift Package Manager mode for Apple builds: inherit, enabled, or disabled. inherit leaves the current Flutter setting unchanged. (ios, macos)"
+    required: false
+    default: "inherit"
   firebase-service-account:
     description: GCP service account JSON for Firebase deploy (web)
     required: false

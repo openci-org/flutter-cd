@@ -10,6 +10,11 @@ import {
   type ProfileResult,
 } from "./asc";
 import { exec, execAndCapture } from "./helpers";
+import {
+  buildNoPubArg,
+  configureSwiftPackageManager,
+  parseSwiftPackageManagerMode,
+} from "./flutter";
 
 const KEYCHAIN_NAME = "openci-macos-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
@@ -18,6 +23,9 @@ const DEVELOPER_ID_G2_CA_URL = "https://www.apple.com/certificateauthority/Devel
 export async function buildSignAndNotarizeMacos(): Promise<void> {
   const workingDirectory = core.getInput("working-directory") || ".";
   const buildArgs = core.getInput("build-args") || "";
+  const swiftPackageManagerMode = parseSwiftPackageManagerMode(
+    core.getInput("swift-package-manager") || "inherit"
+  );
   const certPrivateKey = core.getInput("certificate-private-key").replace(/\\n/g, "\n");
   const ascKeyId = core.getInput("asc-key-id", { required: true });
   const ascIssuerId = core.getInput("asc-issuer-id", { required: true });
@@ -41,6 +49,7 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
   try {
     console.log("OpenCI macOS Build, Sign & Notarize");
     console.log(`   Working directory: ${workingDirectory}`);
+    console.log(`   Swift Package Manager: ${swiftPackageManagerMode}`);
     console.log("");
 
     core.startGroup("Step 1: Generating App Store Connect JWT");
@@ -84,10 +93,12 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
     core.endGroup();
 
     core.startGroup("Step 3: Building macOS app");
+    const pubGetAlreadyRan = await configureSwiftPackageManager(swiftPackageManagerMode, workingDirectory);
+    const noPubArg = buildNoPubArg(pubGetAlreadyRan, buildArgs);
     const noSignXcconfigPath = prepareUnsignedMacosBuild(workingDirectory, tmpDir);
     const buildNumberArg = buildNumberInput ? `--build-number=${shellQuote(buildNumberInput)}` : "";
     await exec(
-      `XCODE_XCCONFIG_FILE=${shellQuote(noSignXcconfigPath)} flutter build macos --release ${buildNumberArg} ${buildArgs}`.trim(),
+      `XCODE_XCCONFIG_FILE=${shellQuote(noSignXcconfigPath)} flutter build macos ${noPubArg} --release ${buildNumberArg} ${buildArgs}`.trim(),
       { cwd: workingDirectory }
     );
     const appPath = appPathInput

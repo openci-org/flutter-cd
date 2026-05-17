@@ -34,6 +34,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
   with:
     platform: "ios"
     working-directory: "apps/dashboard"
+    swift-package-manager: "enabled"
     certificate-private-key: ${{ secrets.OPENCI_CERTIFICATE_PRIVATE_KEY }}
     asc-key-id: ${{ secrets.ASC_KEY_ID }}
     asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
@@ -48,6 +49,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
   with:
     platform: "ios"
     working-directory: "apps/dashboard"
+    swift-package-manager: "enabled"
     distribution-method: "ad-hoc"
     certificate-private-key: ${{ secrets.OPENCI_CERTIFICATE_PRIVATE_KEY }}
     asc-key-id: ${{ secrets.ASC_KEY_ID }}
@@ -62,6 +64,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
   with:
     platform: "macos"
     working-directory: "apps/dashboard"
+    swift-package-manager: "enabled"
     certificate-private-key: ${{ secrets.OPENCI_DEVELOPER_ID_PRIVATE_KEY }}
     asc-key-id: ${{ secrets.ASC_KEY_ID }}
     asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
@@ -80,6 +83,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 | `platform` | Target platform (`web`, `ios`, `macos`) | Yes | - |
 | `working-directory` | Flutter project directory | No | `.` |
 | `build-args` | Additional arguments for `flutter build` | No | `""` |
+| `swift-package-manager` | Flutter Swift Package Manager mode for Apple builds: `inherit`, `enabled`, or `disabled`. `inherit` leaves the current Flutter setting unchanged. `auto`, `true`, and `false` are accepted as aliases. (ios, macos) | No | `"inherit"` |
 | `firebase-service-account` | GCP service account JSON for Firebase deploy (web) | No | `""` |
 | `preview` | Deploy to Firebase Hosting preview channel (web) | No | `"false"` |
 | `certificate-private-key` | RSA private key PEM used to create/reuse signing certificates (ios, macos) | No | `""` |
@@ -110,8 +114,7 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 
 ### iOS (`platform: ios`)
 
-1. Runs `flutter build ios --no-codesign` to compile the app
-2. Handles code signing entirely via shell scripts (no external CLI dependencies):
+1. Handles code signing entirely via shell scripts (no external CLI dependencies):
    - **JWT**: Generates an ASC API token using `openssl`
    - **Certificate**: Creates a Distribution certificate via ASC API (CSR → certificate), or validates and reuses an existing one
    - **Provisioning Profile**: Creates an App Store provisioning profile via ASC API
@@ -119,7 +122,9 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
    - **Xcode Config**: Modifies `project.pbxproj` for manual signing with `sed`
    - **Archive**: Builds with `xcodebuild archive`
    - **Export**: Exports IPA with `xcodebuild -exportArchive`
-3. Exposes the generated IPA via `ipa-path` and `artifact-directory` outputs
+2. Optionally sets Flutter's Swift Package Manager mode when `swift-package-manager` is `enabled` or `disabled`, then runs `flutter pub get`
+3. Runs `flutter build ipa` and exports the IPA
+4. Exposes the generated IPA via `ipa-path` and `artifact-directory` outputs
 4. Uploads to App Store Connect by default for `app-store` distribution
 5. Cleans up temporary keychain and credentials
 
@@ -127,11 +132,12 @@ Zero external dependencies — uses only standard macOS tools (`openssl`, `curl`
 
 1. Imports a provided Developer ID Application `.p12`, or creates/reuses one via App Store Connect when only `certificate-private-key` is provided
 2. Imports the certificate into a temporary keychain
-3. Runs `flutter build macos --release`
-4. When `macos-provisioning-profile` is `true`, creates a `MAC_APP_DIRECT` provisioning profile, embeds it into the `.app`, and signs with the profile's entitlements
-5. Signs the built `.app` with hardened runtime enabled
-6. Packages the `.app` with `ditto`, submits it to Apple's notary service, and staples the ticket
-7. Writes the final notarized zip to `output-directory` and exposes `artifact-path`
+3. Optionally sets Flutter's Swift Package Manager mode when `swift-package-manager` is `enabled` or `disabled`, then runs `flutter pub get`
+4. Runs `flutter build macos --release`
+5. When `macos-provisioning-profile` is `true`, creates a `MAC_APP_DIRECT` provisioning profile, embeds it into the `.app`, and signs with the profile's entitlements
+6. Signs the built `.app` with hardened runtime enabled
+7. Packages the `.app` with `ditto`, submits it to Apple's notary service, and staples the ticket
+8. Writes the final notarized zip to `output-directory` and exposes `artifact-path`
 
 ## License
 

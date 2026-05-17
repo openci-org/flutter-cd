@@ -4,6 +4,11 @@ import * as path from "path";
 import * as os from "os";
 import { exec, execAndCapture } from "./helpers";
 import {
+  buildNoPubArg,
+  configureSwiftPackageManager,
+  parseSwiftPackageManagerMode,
+} from "./flutter";
+import {
   generateAscJwt,
   preflightCheck,
   getOrCreateCertificate,
@@ -26,7 +31,9 @@ function parseDistributionMethod(value: string): IosDistributionMethod {
 export async function buildAndSignIos(): Promise<void> {
   const workingDirectory = core.getInput("working-directory") || ".";
   const buildArgs = core.getInput("build-args") || "";
-  const { bundleId, teamId: appleTeamId } = parsePbxproj(workingDirectory);
+  const swiftPackageManagerMode = parseSwiftPackageManagerMode(
+    core.getInput("swift-package-manager") || "inherit"
+  );
   const scheme = core.getInput("scheme") || "Runner";
   const certPrivateKey = core.getInput("certificate-private-key", { required: true }).replace(/\\n/g, "\n");
   const ascKeyId = core.getInput("asc-key-id", { required: true });
@@ -43,22 +50,29 @@ export async function buildAndSignIos(): Promise<void> {
 
   try {
     console.log("🚀 OpenCI iOS Sign & Build");
-    console.log(`   Bundle ID: ${bundleId}`);
-    console.log(`   Apple Team ID: ${appleTeamId}`);
+    console.log(`   Working directory: ${workingDirectory}`);
     console.log(`   Scheme: ${scheme}`);
     console.log(`   Distribution: ${distributionMethod}`);
+    console.log(`   Swift Package Manager: ${swiftPackageManagerMode}`);
     console.log("");
 
-    // ── Step 1: Generate ASC JWT ────────────────────────────
-    core.startGroup("Step 1: Generating App Store Connect JWT");
+    // ── Step 1: Configure Flutter dependency manager ────────
+    core.startGroup("Step 1: Configuring Flutter dependency manager");
+    const pubGetAlreadyRan = await configureSwiftPackageManager(swiftPackageManagerMode, workingDirectory);
+    core.endGroup();
+
+    const { bundleId, teamId: appleTeamId } = parsePbxproj(workingDirectory);
+
+    // ── Step 2: Generate ASC JWT ────────────────────────────
+    core.startGroup("Step 2: Generating App Store Connect JWT");
     const ascKeyPath = path.join(tmpDir, "AuthKey.p8");
     fs.writeFileSync(ascKeyPath, ascPrivateKey);
     const jwt = await generateAscJwt(ascKeyId, ascIssuerId, ascKeyPath);
     console.log("  ✅ JWT generated");
     core.endGroup();
 
-    // ── Step 2: Preflight check ─────────────────────────────
-    core.startGroup("Step 2: Preflight version check");
+    // ── Step 3: Preflight check ─────────────────────────────
+    core.startGroup("Step 3: Preflight version check");
     const parsed = parseVersion(workingDirectory);
     const version = parsed.version;
     const buildNumber = buildNumberInput || parsed.buildNumber;
@@ -70,16 +84,16 @@ export async function buildAndSignIos(): Promise<void> {
     }
     core.endGroup();
 
-    // ── Step 3: Get or create distribution certificate ──────
-    core.startGroup("Step 3: Setting up distribution certificate");
+    // ── Step 4: Get or create distribution certificate ──────
+    core.startGroup("Step 4: Setting up distribution certificate");
     const certKeyPath = path.join(tmpDir, "cert_key.pem");
     fs.writeFileSync(certKeyPath, certPrivateKey);
     const cert = await getOrCreateCertificate(jwt, certKeyPath, tmpDir);
     console.log(`  Certificate ID: ${cert.certificateId}`);
     core.endGroup();
 
-    // ── Step 4: Create provisioning profile ─────────────────
-    core.startGroup("Step 4: Creating provisioning profile");
+    // ── Step 5: Create provisioning profile ─────────────────
+    core.startGroup("Step 5: Creating provisioning profile");
     const profileType = distributionMethod === "app-store" ? "IOS_APP_STORE" : "IOS_APP_ADHOC";
     const deviceIds = distributionMethod === "ad-hoc" ? await listEnabledDeviceIds(jwt) : [];
     const profile = await createProvisioningProfile(jwt, cert.certificateId, bundleId, profileType, deviceIds);
@@ -88,48 +102,49 @@ export async function buildAndSignIos(): Promise<void> {
     console.log(`     UUID: ${profile.uuid}`);
     core.endGroup();
 
-    // ── Step 5: Setup keychain ──────────────────────────────
-    core.startGroup("Step 5: Setting up temporary keychain");
+    // ── Step 6: Setup keychain ──────────────────────────────
+    core.startGroup("Step 6: Setting up temporary keychain");
     await setupKeychain();
     console.log("  ✅ Keychain created");
     core.endGroup();
 
-    // ── Step 6: Import certificate ──────────────────────────
-    core.startGroup("Step 6: Importing certificate");
+    // ── Step 7: Import certificate ──────────────────────────
+    core.startGroup("Step 7: Importing certificate");
     await importCertificate(cert.p12Base64, cert.password, tmpDir);
     console.log("  ✅ Certificate imported");
     core.endGroup();
 
-    // ── Step 7: Install provisioning profile ────────────────
-    core.startGroup("Step 7: Installing provisioning profile");
+    // ── Step 8: Install provisioning profile ────────────────
+    core.startGroup("Step 8: Installing provisioning profile");
     await installProvisioningProfile(profile, bundleId);
     console.log(`  ✅ Profile installed (UUID: ${profile.uuid})`);
     core.endGroup();
 
-    // ── Step 8: Edit xcodeproj ──────────────────────────────
-    core.startGroup("Step 8: Configuring Xcode project for manual signing");
+    // ── Step 9: Edit xcodeproj ──────────────────────────────
+    core.startGroup("Step 9: Configuring Xcode project for manual signing");
     editXcodeProject(workingDirectory, bundleId, appleTeamId, profile);
     console.log("  ✅ Xcode project updated for manual signing");
     core.endGroup();
 
-    // ── Step 9: Generate ExportOptions.plist ────────────────
-    core.startGroup("Step 9: Generating ExportOptions.plist");
+    // ── Step 10: Generate ExportOptions.plist ───────────────
+    core.startGroup("Step 10: Generating ExportOptions.plist");
     const exportOptionsPath = path.resolve(workingDirectory, "ExportOptions.plist");
     generateExportOptions(exportOptionsPath, appleTeamId, bundleId, profile.name, distributionMethod);
     console.log("  ✅ ExportOptions.plist generated");
     core.endGroup();
 
-    // ── Step 10: Flutter build IPA ──────────────────────────
-    core.startGroup("Step 10: Building IPA");
+    // ── Step 11: Flutter build IPA ──────────────────────────
+    core.startGroup("Step 11: Building IPA");
     console.log("  ⏳ This may take several minutes...");
     const buildNumberArg = buildNumberInput ? `--build-number=${buildNumber}` : "";
+    const noPubArg = buildNoPubArg(pubGetAlreadyRan, buildArgs);
     const privateKeysDir = path.join(os.homedir(), "private_keys");
     fs.mkdirSync(privateKeysDir, { recursive: true });
     const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
     fs.copyFileSync(ascKeyPath, apiKeyDest);
 
     await exec(
-      `flutter build ipa --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
+      `flutter build ipa ${noPubArg} --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
       { cwd: workingDirectory }
     );
 
@@ -150,8 +165,8 @@ export async function buildAndSignIos(): Promise<void> {
     core.setOutput("distribution-method", distributionMethod);
 
     if (uploadToAppStoreConnect) {
-      // ── Step 11: Upload to App Store Connect ─────────────────
-      core.startGroup("Step 11: Uploading to App Store Connect");
+      // ── Step 12: Upload to App Store Connect ─────────────────
+      core.startGroup("Step 12: Uploading to App Store Connect");
       console.log(`  ⏳ Uploading ${ipaFiles[0]}...`);
       const uploadOutput = await execAndCapture(
         `xcrun altool --upload-app --type ios -f "${ipaPath}" --apiKey "${ascKeyId}" --apiIssuer "${ascIssuerId}" 2>&1`
