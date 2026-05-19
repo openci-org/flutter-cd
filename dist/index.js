@@ -25976,13 +25976,22 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, p
     const bundleIdResourceId = bundleIds[0].id;
     const label = profileLabel(profileType);
     const allProfiles = await ascApi(jwt, "/profiles?limit=200");
-    const profiles = allProfiles?.data ?? [];
-    for (const profile of profiles) {
-        const name = profile.attributes?.name ?? "";
-        if (name.startsWith(`OpenCI ${label} `) && name.includes(bundleIdentifier)) {
-            console.log(`  🗑️  Deleting stale profile: ${name}`);
-            await ascApi(jwt, `/profiles/${profile.id}`, "DELETE").catch(() => { });
+    const profileNamePrefix = `OpenCI ${label} ${bundleIdentifier} `;
+    const matchingProfiles = sortProfilesByNewest((allProfiles?.data ?? []).filter((profile) => profile.attributes?.name?.startsWith(profileNamePrefix)));
+    for (const profile of matchingProfiles) {
+        const reusableProfile = await reusableProvisioningProfile(jwt, profile.id, bundleIdResourceId, certificateId, profileType, deviceIds).catch((error) => {
+            console.log(`  ⚠️  Could not inspect profile ${profile.id} for reuse: ${error}`);
+            return null;
+        });
+        if (reusableProfile) {
+            console.log(`  ✅ Reusing existing profile: ${reusableProfile.name} (${reusableProfile.uuid})`);
+            return reusableProfile;
         }
+    }
+    for (const profile of matchingProfiles) {
+        const name = profile.attributes?.name ?? profile.id;
+        console.log(`  🗑️  Deleting stale profile: ${name}`);
+        await ascApi(jwt, `/profiles/${profile.id}`, "DELETE").catch(() => { });
     }
     const timestamp = new Date()
         .toISOString()
@@ -26018,6 +26027,82 @@ async function createProvisioningProfile(jwt, certificateId, bundleIdentifier, p
         profileContent: response.data.attributes.profileContent,
         uuid: response.data.attributes.uuid,
     };
+}
+function sortProfilesByNewest(profiles) {
+    return [...profiles].sort((a, b) => profileUpdatedMs(b) - profileUpdatedMs(a));
+}
+function profileUpdatedMs(profile) {
+    for (const field of ["updatedDate", "createdDate", "expirationDate"]) {
+        const value = profile.attributes?.[field];
+        if (typeof value !== "string") {
+            continue;
+        }
+        const time = new Date(value).getTime();
+        if (Number.isFinite(time)) {
+            return time;
+        }
+    }
+    return 0;
+}
+async function reusableProvisioningProfile(jwt, profileId, bundleIdResourceId, certificateId, profileType, deviceIds) {
+    const response = await ascApi(jwt, `/profiles/${profileId}?include=bundleId,certificates,devices`);
+    const profile = response?.data;
+    if (!profile) {
+        return null;
+    }
+    const attributes = profile.attributes ?? {};
+    if (attributes.profileType !== profileType) {
+        return null;
+    }
+    if (attributes.profileState && attributes.profileState !== "ACTIVE") {
+        return null;
+    }
+    const expirationTime = new Date(attributes.expirationDate ?? 0).getTime();
+    if (Number.isFinite(expirationTime) && expirationTime <= Date.now()) {
+        return null;
+    }
+    if (typeof attributes.profileContent !== "string" || attributes.profileContent === "") {
+        return null;
+    }
+    const bundleIds = relationshipIds(profile, response, "bundleId");
+    if (bundleIds.length > 0 && !bundleIds.includes(bundleIdResourceId)) {
+        return null;
+    }
+    const certificateIds = relationshipIds(profile, response, "certificates");
+    if (certificateIds.length === 0 || !certificateIds.includes(certificateId)) {
+        return null;
+    }
+    if (PROFILE_TYPES_REQUIRING_DEVICES.has(profileType)) {
+        const profileDeviceIds = relationshipIds(profile, response, "devices");
+        if (profileDeviceIds.length === 0) {
+            return null;
+        }
+        const profileDeviceIdSet = new Set(profileDeviceIds);
+        if (!deviceIds.every((id) => profileDeviceIdSet.has(id))) {
+            return null;
+        }
+    }
+    return {
+        id: profile.id,
+        name: attributes.name ?? profileId,
+        profileContent: attributes.profileContent,
+        uuid: attributes.uuid ?? "",
+        reused: true,
+    };
+}
+function relationshipIds(resource, response, relationshipName) {
+    const relationshipData = resource.relationships?.[relationshipName]?.data;
+    if (Array.isArray(relationshipData)) {
+        return relationshipData.map((item) => item.id).filter(Boolean);
+    }
+    if (relationshipData?.id) {
+        return [relationshipData.id];
+    }
+    const includedType = relationshipName === "bundleId" ? "bundleIds" : relationshipName;
+    return (response?.included ?? [])
+        .filter((item) => item.type === includedType)
+        .map((item) => item.id)
+        .filter(Boolean);
 }
 async function findDeveloperIdCertificateIdForP12(jwt, p12Base64, password, tmpDir) {
     const p12Path = `${tmpDir}/developer-id-match.p12`;
@@ -26501,7 +26586,7 @@ async function buildAndSignIos() {
         const profileType = distributionMethod === "app-store" ? "IOS_APP_STORE" : "IOS_APP_ADHOC";
         const deviceIds = distributionMethod === "ad-hoc" ? await (0, asc_1.listEnabledDeviceIds)(jwt) : [];
         const profile = await (0, asc_1.createProvisioningProfile)(jwt, cert.certificateId, bundleId, profileType, deviceIds);
-        console.log(`  ✅ Profile created`);
+        console.log(`  ✅ Profile ${profile.reused ? "reused" : "created"}`);
         console.log(`     Name: ${profile.name}`);
         console.log(`     UUID: ${profile.uuid}`);
         core.endGroup();
@@ -26915,7 +27000,7 @@ async function buildSignAndNotarizeMacos() {
             const bundleIdentifier = await readBundleIdentifier(appPath);
             console.log(`  Bundle ID: ${bundleIdentifier}`);
             const profile = await (0, asc_1.createProvisioningProfile)(jwt, developerIdCertificateId, bundleIdentifier, "MAC_APP_DIRECT");
-            console.log(`  Created MAC_APP_DIRECT profile: ${profile.name} (${profile.uuid})`);
+            console.log(`  ${profile.reused ? "Reused" : "Created"} MAC_APP_DIRECT profile: ${profile.name} (${profile.uuid})`);
             resolvedEntitlementsPath = await embedProvisioningProfileAndExtractEntitlements(appPath, profile, tmpDir);
             console.log("  Embedded provisioning profile and extracted signing entitlements");
         }

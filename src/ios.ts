@@ -127,7 +127,7 @@ export async function buildAndSignIos(): Promise<void> {
     const profileType = distributionMethod === "app-store" ? "IOS_APP_STORE" : "IOS_APP_ADHOC";
     const deviceIds = distributionMethod === "ad-hoc" ? await listEnabledDeviceIds(jwt) : [];
     const profile = await createProvisioningProfile(jwt, cert.certificateId, bundleId, profileType, deviceIds);
-    console.log(`  ✅ Profile created`);
+    console.log(`  ✅ Profile ${profile.reused ? "reused" : "created"}`);
     console.log(`     Name: ${profile.name}`);
     console.log(`     UUID: ${profile.uuid}`);
     core.endGroup();

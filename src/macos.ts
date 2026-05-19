@@ -121,7 +121,7 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
         bundleIdentifier,
         "MAC_APP_DIRECT"
       );
-      console.log(`  Created MAC_APP_DIRECT profile: ${profile.name} (${profile.uuid})`);
+      console.log(`  ${profile.reused ? "Reused" : "Created"} MAC_APP_DIRECT profile: ${profile.name} (${profile.uuid})`);
       resolvedEntitlementsPath = await embedProvisioningProfileAndExtractEntitlements(appPath, profile, tmpDir);
       console.log("  Embedded provisioning profile and extracted signing entitlements");
     }

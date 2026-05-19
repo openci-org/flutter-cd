@@ -401,6 +401,7 @@ export interface ProfileResult {
   name: string;
   profileContent: string;
   uuid: string;
+  reused?: boolean;
 }
 
 const PROFILE_TYPES_REQUIRING_DEVICES = new Set([
@@ -452,13 +453,35 @@ export async function createProvisioningProfile(
 
   const label = profileLabel(profileType);
   const allProfiles = await ascApi(jwt, "/profiles?limit=200");
-  const profiles = allProfiles?.data ?? [];
-  for (const profile of profiles) {
-    const name = profile.attributes?.name ?? "";
-    if (name.startsWith(`OpenCI ${label} `) && name.includes(bundleIdentifier)) {
-      console.log(`  🗑️  Deleting stale profile: ${name}`);
-      await ascApi(jwt, `/profiles/${profile.id}`, "DELETE").catch(() => {});
+  const profileNamePrefix = `OpenCI ${label} ${bundleIdentifier} `;
+  const matchingProfiles = sortProfilesByNewest(
+    (allProfiles?.data ?? []).filter((profile: any) =>
+      profile.attributes?.name?.startsWith(profileNamePrefix)
+    )
+  );
+
+  for (const profile of matchingProfiles) {
+    const reusableProfile = await reusableProvisioningProfile(
+      jwt,
+      profile.id,
+      bundleIdResourceId,
+      certificateId,
+      profileType,
+      deviceIds
+    ).catch((error) => {
+      console.log(`  ⚠️  Could not inspect profile ${profile.id} for reuse: ${error}`);
+      return null;
+    });
+    if (reusableProfile) {
+      console.log(`  ✅ Reusing existing profile: ${reusableProfile.name} (${reusableProfile.uuid})`);
+      return reusableProfile;
     }
+  }
+
+  for (const profile of matchingProfiles) {
+    const name = profile.attributes?.name ?? profile.id;
+    console.log(`  🗑️  Deleting stale profile: ${name}`);
+    await ascApi(jwt, `/profiles/${profile.id}`, "DELETE").catch(() => {});
   }
 
   const timestamp = new Date()
@@ -500,6 +523,104 @@ export async function createProvisioningProfile(
     profileContent: response.data.attributes.profileContent,
     uuid: response.data.attributes.uuid,
   };
+}
+
+function sortProfilesByNewest(profiles: any[]): any[] {
+  return [...profiles].sort(
+    (a, b) => profileUpdatedMs(b) - profileUpdatedMs(a)
+  );
+}
+
+function profileUpdatedMs(profile: any): number {
+  for (const field of ["updatedDate", "createdDate", "expirationDate"]) {
+    const value = profile.attributes?.[field];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const time = new Date(value).getTime();
+    if (Number.isFinite(time)) {
+      return time;
+    }
+  }
+  return 0;
+}
+
+async function reusableProvisioningProfile(
+  jwt: string,
+  profileId: string,
+  bundleIdResourceId: string,
+  certificateId: string,
+  profileType: string,
+  deviceIds: string[]
+): Promise<ProfileResult | null> {
+  const response = await ascApi(
+    jwt,
+    `/profiles/${profileId}?include=bundleId,certificates,devices`
+  );
+  const profile = response?.data;
+  if (!profile) {
+    return null;
+  }
+
+  const attributes = profile.attributes ?? {};
+  if (attributes.profileType !== profileType) {
+    return null;
+  }
+  if (attributes.profileState && attributes.profileState !== "ACTIVE") {
+    return null;
+  }
+  const expirationTime = new Date(attributes.expirationDate ?? 0).getTime();
+  if (Number.isFinite(expirationTime) && expirationTime <= Date.now()) {
+    return null;
+  }
+  if (typeof attributes.profileContent !== "string" || attributes.profileContent === "") {
+    return null;
+  }
+
+  const bundleIds = relationshipIds(profile, response, "bundleId");
+  if (bundleIds.length > 0 && !bundleIds.includes(bundleIdResourceId)) {
+    return null;
+  }
+
+  const certificateIds = relationshipIds(profile, response, "certificates");
+  if (certificateIds.length === 0 || !certificateIds.includes(certificateId)) {
+    return null;
+  }
+
+  if (PROFILE_TYPES_REQUIRING_DEVICES.has(profileType)) {
+    const profileDeviceIds = relationshipIds(profile, response, "devices");
+    if (profileDeviceIds.length === 0) {
+      return null;
+    }
+    const profileDeviceIdSet = new Set(profileDeviceIds);
+    if (!deviceIds.every((id) => profileDeviceIdSet.has(id))) {
+      return null;
+    }
+  }
+
+  return {
+    id: profile.id,
+    name: attributes.name ?? profileId,
+    profileContent: attributes.profileContent,
+    uuid: attributes.uuid ?? "",
+    reused: true,
+  };
+}
+
+function relationshipIds(resource: any, response: any, relationshipName: string): string[] {
+  const relationshipData = resource.relationships?.[relationshipName]?.data;
+  if (Array.isArray(relationshipData)) {
+    return relationshipData.map((item: any) => item.id).filter(Boolean);
+  }
+  if (relationshipData?.id) {
+    return [relationshipData.id];
+  }
+
+  const includedType = relationshipName === "bundleId" ? "bundleIds" : relationshipName;
+  return (response?.included ?? [])
+    .filter((item: any) => item.type === includedType)
+    .map((item: any) => item.id)
+    .filter(Boolean);
 }
 
 export async function findDeveloperIdCertificateIdForP12(
