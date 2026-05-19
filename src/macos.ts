@@ -15,6 +15,10 @@ import {
   configureSwiftPackageManager,
   parseSwiftPackageManagerMode,
 } from "./flutter";
+import {
+  appendXcodeCompilationCacheSettings,
+  reportXcodeCompilationCache,
+} from "./xcode";
 
 const KEYCHAIN_NAME = "openci-macos-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
@@ -97,10 +101,12 @@ export async function buildSignAndNotarizeMacos(): Promise<void> {
     const noPubArg = buildNoPubArg(pubGetAlreadyRan, buildArgs);
     const noSignXcconfigPath = prepareUnsignedMacosBuild(workingDirectory, tmpDir);
     const buildNumberArg = buildNumberInput ? `--build-number=${shellQuote(buildNumberInput)}` : "";
+    console.log("  Xcode compilation cache: enabled");
     await exec(
       `XCODE_XCCONFIG_FILE=${shellQuote(noSignXcconfigPath)} flutter build macos ${noPubArg} --release ${buildNumberArg} ${buildArgs}`.trim(),
       { cwd: workingDirectory }
     );
+    await reportXcodeCompilationCache();
     const appPath = appPathInput
       ? path.resolve(workingDirectory, appPathInput)
       : path.resolve(findBuiltAppPath(workingDirectory));
@@ -226,6 +232,7 @@ function prepareUnsignedMacosBuild(workingDirectory: string, tmpDir: string): st
       "",
     ].join("\n")
   );
+  appendXcodeCompilationCacheSettings(noSignXcconfigPath);
 
   const projectPath = path.join(
     workingDirectory,

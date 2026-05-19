@@ -17,6 +17,10 @@ import {
   listEnabledDeviceIds,
   type ProfileResult,
 } from "./asc";
+import {
+  prepareXcodeCompilationCacheXcconfig,
+  reportXcodeCompilationCache,
+} from "./xcode";
 
 const KEYCHAIN_NAME = "openci-build.keychain";
 const KEYCHAIN_PASSWORD = "openci_temp_password";
@@ -183,11 +187,14 @@ export async function buildAndSignIos(): Promise<void> {
     fs.mkdirSync(privateKeysDir, { recursive: true });
     const apiKeyDest = path.join(privateKeysDir, `AuthKey_${ascKeyId}.p8`);
     fs.copyFileSync(ascKeyPath, apiKeyDest);
+    const compilationCacheXcconfigPath = prepareXcodeCompilationCacheXcconfig(tmpDir);
+    console.log("  Xcode compilation cache: enabled");
 
     await exec(
-      `flutter build ipa ${noPubArg} --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
+      `XCODE_XCCONFIG_FILE=${shellQuote(compilationCacheXcconfigPath)} flutter build ipa ${noPubArg} --release --export-options-plist="${exportOptionsPath}" ${buildNumberArg} ${buildArgs}`.trim(),
       { cwd: workingDirectory }
     );
+    await reportXcodeCompilationCache();
 
     // Verify IPA was actually created
     const ipaDir = path.join(workingDirectory, "build", "ios", "ipa");
